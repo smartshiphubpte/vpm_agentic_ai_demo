@@ -8,6 +8,8 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from vpm_agents.tools.weather_report import weather_hard_reason
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -370,8 +372,9 @@ class MockBackend:
                 "validTime": (datetime.now(timezone.utc) + timedelta(hours=6 * i)).isoformat(),
             }
             points.append(wp)
-            if wind >= 35 or wave >= 4.0:
-                hard.append({"index": i, "reason": "wind" if wind >= 35 else "wave", "sample": wp})
+            reason = weather_hard_reason(wp)
+            if reason:
+                hard.append({"index": i, "reason": reason, "sample": wp})
         return {"points": points, "hardRegions": hard, "provider": "Spire/NOAA-mock"}
 
     def weather_point(self, token: str, lat: float, lon: float) -> dict:

@@ -34,8 +34,63 @@ def haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r_nm * math.asin(min(1.0, math.sqrt(a)))
 
 
+def _merc_y(lat: float) -> float:
+    """Web Mercator Y (unit sphere) — same chord Leaflet draws between two WPs."""
+    lat = max(-89.999, min(89.999, float(lat)))
+    return math.log(math.tan(math.pi / 4.0 + math.radians(lat) / 2.0))
+
+
+def _inv_merc_y(y: float) -> float:
+    return math.degrees(2.0 * math.atan(math.exp(y)) - math.pi / 2.0)
+
+
 def interpolate(a: list[float], b: list[float], t: float) -> list[float]:
-    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+    """Point at fraction t along the straight segment A→B (on the master-route line)."""
+    t = max(0.0, min(1.0, float(t)))
+    lat1, lon1 = float(a[0]), float(a[1])
+    lat2, lon2 = float(b[0]), float(b[1])
+    if t <= 1e-12:
+        return [lat1, lon1]
+    if t >= 1.0 - 1e-12:
+        return [lat2, lon2]
+    lon = lon1 + (lon2 - lon1) * t
+    try:
+        lat = _inv_merc_y(_merc_y(lat1) + (_merc_y(lat2) - _merc_y(lat1)) * t)
+    except (ValueError, OverflowError):
+        lat = lat1 + (lat2 - lat1) * t
+    return [lat, lon]
+
+
+def closest_on_segment(
+    lat: float, lon: float, a: list[float], b: list[float]
+) -> tuple[float, float, float, float]:
+    """Project P onto segment AB. Returns (lat, lon, t, dist_nm)."""
+    ax, ay = float(a[1]), _merc_y(a[0])
+    bx, by = float(b[1]), _merc_y(b[0])
+    px, py = float(lon), _merc_y(lat)
+    dx, dy = bx - ax, by - ay
+    len2 = dx * dx + dy * dy
+    if len2 < 1e-18:
+        qlat, qlon, t = float(a[0]), float(a[1]), 0.0
+    else:
+        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / len2))
+        qlat, qlon = interpolate(a, b, t)
+    return qlat, qlon, t, haversine_nm(lat, lon, qlat, qlon)
+
+
+def snap_to_master(
+    master: list[list[float]], lat: float, lon: float
+) -> tuple[int, float, float, float]:
+    """Nearest point on the master polyline. Returns (leg_index, t, lat, lon)."""
+    best: tuple[float, int, float, float, float] | None = None
+    for i in range(len(master) - 1):
+        qlat, qlon, t, d = closest_on_segment(lat, lon, master[i], master[i + 1])
+        if best is None or d < best[0]:
+            best = (d, i, t, qlat, qlon)
+    if best is None:
+        return 0, 0.0, float(master[0][0]), float(master[0][1])
+    _d, i, t, qlat, qlon = best
+    return i, t, qlat, qlon
 
 
 def six_hour_waypoints(
@@ -45,7 +100,7 @@ def six_hour_waypoints(
     horizon_hours: float | None = None,
     interval_h: float = 6.0,
 ) -> list[dict]:
-    """Walk the master route at CP speed; emit a point every interval_h hours."""
+    """Walk the master polyline at CP speed; every sample sits on a master segment."""
     if len(master) < 2:
         raise ValueError("master route needs at least 2 points")
     if speed_kn <= 0:
@@ -54,18 +109,16 @@ def six_hour_waypoints(
     start = start or datetime.now(timezone.utc)
     step_nm = speed_kn * interval_h
 
-    points: list[dict] = []
-    seq = 0
-    points.append(
-        {
+    def _pt(seq: int, lat: float, lon: float, hours: float) -> dict:
+        return {
             "seq": seq,
-            "lat": master[0][0],
-            "lon": master[0][1],
-            "eta_utc": start.isoformat(),
+            "lat": lat,
+            "lon": lon,
+            "eta_utc": (start + timedelta(hours=hours)).isoformat(),
         }
-    )
-    seq += 1
 
+    points: list[dict] = [_pt(0, float(master[0][0]), float(master[0][1]), 0.0)]
+    seq = 1
     leg_i = 0
     progress_on_leg = 0.0
     elapsed_h = 0.0
@@ -82,17 +135,9 @@ def six_hour_waypoints(
         remain = leg_nm - progress_on_leg
         if remain >= step_nm:
             progress_on_leg += step_nm
-            t = progress_on_leg / leg_nm
-            lat, lon = interpolate(a, b, t)
+            lat, lon = interpolate(a, b, progress_on_leg / leg_nm)
             elapsed_h += interval_h
-            points.append(
-                {
-                    "seq": seq,
-                    "lat": round(lat, 5),
-                    "lon": round(lon, 5),
-                    "eta_utc": (start + timedelta(hours=elapsed_h)).isoformat(),
-                }
-            )
+            points.append(_pt(seq, lat, lon, elapsed_h))
             seq += 1
         else:
             leftover_nm = step_nm - remain
@@ -106,17 +151,9 @@ def six_hour_waypoints(
                     continue
                 if leftover_nm < leg_nm:
                     progress_on_leg = leftover_nm
-                    t = progress_on_leg / leg_nm
-                    lat, lon = interpolate(a, b, t)
+                    lat, lon = interpolate(a, b, progress_on_leg / leg_nm)
                     elapsed_h += interval_h
-                    points.append(
-                        {
-                            "seq": seq,
-                            "lat": round(lat, 5),
-                            "lon": round(lon, 5),
-                            "eta_utc": (start + timedelta(hours=elapsed_h)).isoformat(),
-                        }
-                    )
+                    points.append(_pt(seq, lat, lon, elapsed_h))
                     seq += 1
                     leftover_nm = 0
                 else:
@@ -127,19 +164,10 @@ def six_hour_waypoints(
                 break
 
     last = master[-1]
-    if points[-1]["lat"] != last[0] or points[-1]["lon"] != last[1]:
+    if haversine_nm(points[-1]["lat"], points[-1]["lon"], last[0], last[1]) > 1e-4:
         if horizon_hours is None or elapsed_h < max_h:
-            cur = [points[-1]["lat"], points[-1]["lon"]]
-            rem = haversine_nm(cur[0], cur[1], last[0], last[1])
-            eta = start + timedelta(hours=elapsed_h + rem / speed_kn)
-            points.append(
-                {
-                    "seq": seq,
-                    "lat": last[0],
-                    "lon": last[1],
-                    "eta_utc": eta.isoformat(),
-                }
-            )
+            rem = haversine_nm(points[-1]["lat"], points[-1]["lon"], last[0], last[1])
+            points.append(_pt(seq, float(last[0]), float(last[1]), elapsed_h + rem / speed_kn))
     return points
 
 
@@ -153,8 +181,14 @@ def nearest_master_index(master: list[list[float]], lat: float, lon: float) -> i
 
 
 def remaining_route(master: list[list[float]], lat: float, lon: float) -> list[list[float]]:
-    i = nearest_master_index(master, lat, lon)
-    return [[lat, lon]] + master[i + 1 :]
+    """Master polyline from the snap of (lat,lon) onto a segment through destination."""
+    if len(master) < 2:
+        return [[lat, lon]] + list(master)
+    i, t, qlat, qlon = snap_to_master(master, lat, lon)
+    if t >= 1.0 - 1e-9:
+        rest = master[i + 1 :]
+        return rest if rest else [master[-1]]
+    return [[qlat, qlon]] + master[i + 1 :]
 
 
 def min_distance_to_route(lat: float, lon: float, route: list[list[float]]) -> float:
@@ -166,3 +200,19 @@ def min_distance_to_route(lat: float, lon: float, route: list[list[float]]) -> f
     if not route:
         return float("inf")
     return min(haversine_nm(lat, lon, p[0], p[1]) for p in route)
+
+
+if __name__ == "__main__":
+    a, b = [0.0, 0.0], [0.0, 10.0]
+    mid = interpolate(a, b, 0.5)
+    assert abs(mid[0]) < 1e-9 and abs(mid[1] - 5.0) < 1e-9
+    master = [[0.0, 0.0], [0.0, 10.0], [5.0, 10.0]]
+    qlat, qlon, t, _d = closest_on_segment(1.0, 5.0, master[0], master[1])
+    assert 0.4 < t < 0.6 and abs(qlat) < 0.05
+    rem = remaining_route(master, 1.0, 4.0)
+    assert rem[0][1] > 0 and rem[-1] == master[-1]
+    pts = six_hour_waypoints(master, 10.0, interval_h=6.0, horizon_hours=48)
+    for p in pts:
+        _i, _t, slat, slon = snap_to_master(master, p["lat"], p["lon"])
+        assert haversine_nm(p["lat"], p["lon"], slat, slon) < 0.05, "6h WP left the master line"
+    print("geo self-check ok")

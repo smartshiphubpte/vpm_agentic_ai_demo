@@ -85,6 +85,8 @@ Reply with **only** this JSON object:
 }
 ```
 
+`weather_limits` come from WeatherReportAgent.md (not duplicated here).
+
 ## Failure
 
 - If the input has fewer than 2 waypoints, still return those two unchanged.

@@ -29,6 +29,7 @@ from vpm_agents.tools.weather_report import (
     extract_bad_weather_events,
     format_bad_weather_block,
     write_weather_report,
+    annotate_track_hard,
 )
 
 
@@ -109,6 +110,7 @@ def _write_combined(
     combined = build_voyage_track(
         voyage_number, plan, wx, noon=noon, vessel_name=vessel_name, provider=wx.get("provider", "")
     )
+    annotate_track_hard(combined)
     path = voyage_dir / f"{prefix}_{_stamp()}.json"
     path.write_text(json.dumps(combined, indent=2), encoding="utf-8")
     return path
@@ -315,7 +317,7 @@ class NoonOpsAgent(Agent):
                     pass
             remaining = remaining_route(master, noon["lat"], noon["lon"])
             if len(remaining) < 2:
-                remaining = [[noon["lat"], noon["lon"]], master[-1]]
+                remaining = master[-2:] if len(master) >= 2 else master
             plan = six_hour_waypoints(
                 remaining,
                 speed,
@@ -507,6 +509,7 @@ class WeatherReportAgent(Agent):
                         vessel_id=rec.get("vessel_id", ""),
                         vessel_name=rec.get("vessel_name", ""),
                         plan_label="6-hour pre-voyage plan",
+                        spec=self.spec,
                     )
                 else:
                     weather_txt = weather_json = None

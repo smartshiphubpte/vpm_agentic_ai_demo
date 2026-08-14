@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from vpm_agents.config import settings
+from vpm_agents.tools.weather_report import weather_hard_reason, weather_limits_from
 
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
@@ -30,6 +31,7 @@ def fetch_weather_along_route(waypoints: list) -> dict[str, Any]:
     hard: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
     interval_h = float(settings.waypoint_interval_hours)
+    limits = weather_limits_from()
 
     with httpx.Client(timeout=60.0, follow_redirects=True) as client:
         for start in range(0, len(waypoints), _CHUNK):
@@ -88,7 +90,7 @@ def fetch_weather_along_route(waypoints: list) -> dict[str, Any]:
                     "validTime": when.isoformat(),
                 }
                 points.append(wp)
-                reason = _hard_reason(wp)
+                reason = weather_hard_reason(wp, limits)
                 if reason:
                     hard.append({"index": idx, "reason": reason, "sample": wp})
 
@@ -170,15 +172,8 @@ def _nearest(hourly: dict[str, Any] | None, when: datetime, key: str) -> float |
     return None if v is None else float(v)
 
 
-def _hard_reason(wp: dict[str, Any]) -> str | None:
-    w, wave, swell = wp.get("windKn"), wp.get("waveM"), wp.get("swellM")
-    if w is not None and float(w) >= settings.weather_wind_threshold_kn:
-        return "wind"
-    if wave is not None and float(wave) >= settings.weather_wave_threshold_m:
-        return "wave"
-    if swell is not None and float(swell) >= settings.weather_swell_threshold_m:
-        return "swell"
-    return None
+def _hard_reason(wp: dict[str, Any], limits: dict[str, float] | None = None) -> str | None:
+    return weather_hard_reason(wp, limits)
 
 
 if __name__ == "__main__":

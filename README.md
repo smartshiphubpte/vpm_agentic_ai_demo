@@ -169,7 +169,7 @@ Copy `_TEMPLATE.md` to add a new agent. Supervisor workflows + goal keywords liv
 
 ## Expected bad weather — dates & reasons
 
-When thresholds are exceeded (configurable via `VPM_WEATHER_WIND_THRESHOLD_KN`, `VPM_WEATHER_WAVE_THRESHOLD_M`), events list **date/time**, **position**, and **reason**.
+When thresholds are exceeded (`weather_limits` in `WeatherReportAgent.md` Defaults), events list **date/time**, **position**, and **reason**.
 
 Output folder: `VPM_WEATHER_OUT_DIR/{voyage_number}/`
 - `weather_report_*.txt` — human-readable

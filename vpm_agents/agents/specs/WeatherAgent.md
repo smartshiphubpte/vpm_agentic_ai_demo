@@ -36,6 +36,8 @@ alert agents can adapt.
 }
 ```
 
+Hard-region flags use `weather_limits` from **WeatherReportAgent.md** (one bar for report + GUI).
+
 `prefer_route`: `suggested` then fall back to master (current code path).
 
 ## Writes

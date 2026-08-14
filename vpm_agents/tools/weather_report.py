@@ -26,17 +26,65 @@ def weather_out_dir(voyage_number: str) -> Path:
     return out
 
 
+def weather_limits_from(spec: Any | None = None) -> dict[str, float]:
+    """Wind/wave/swell bars — always WeatherReportAgent.md Defaults unless a spec is passed."""
+    if spec is None:
+        from vpm_agents.core.spec_loader import load_agent_spec
+
+        spec = load_agent_spec("WeatherReportAgent")
+    raw = spec.get("weather_limits") or {}
+    return {
+        "max_wind_kn": float(raw.get("max_wind_kn", 35)),
+        "max_wave_m": float(raw.get("max_wave_m", 4.0)),
+        "max_swell_m": float(raw.get("max_swell_m", 3.0)),
+    }
+
+
+def weather_hard_reason(wx: dict[str, Any] | None, limits: dict[str, float] | None = None) -> str | None:
+    """Same bars the report and GUI use — wind / wave / swell vs WeatherReportAgent limits."""
+    if not wx:
+        return None
+    lim = limits or weather_limits_from()
+    w, wave, swell = wx.get("windKn"), wx.get("waveM"), wx.get("swellM")
+    if w is not None and float(w) >= lim["max_wind_kn"]:
+        return "wind"
+    if wave is not None and float(wave) >= lim["max_wave_m"]:
+        return "wave"
+    if swell is not None and float(swell) >= lim["max_swell_m"]:
+        return "swell"
+    return None
+
+
+def annotate_track_hard(track: dict[str, Any], spec: Any | None = None) -> dict[str, Any]:
+    """Stamp weather_limits and recompute hard flags so GUI JSON matches the report."""
+    lim = weather_limits_from(spec)
+    track["weather_limits"] = lim
+    hard: list[dict[str, Any]] = []
+    for i, p in enumerate(track.get("track") or []):
+        wx = p.get("weather")
+        if not isinstance(wx, dict):
+            continue
+        reason = weather_hard_reason(wx, lim)
+        wx["hard"] = reason is not None
+        if reason:
+            hard.append({"index": i, "seq": p.get("seq"), "reason": reason, "sample": {"lat": p.get("lat"), "lon": p.get("lon")}})
+    track["hard_regions"] = hard
+    return track
+
+
 def extract_bad_weather_events(
     track: dict[str, Any],
     *,
     wind_kn: float | None = None,
     wave_m: float | None = None,
     swell_m: float | None = None,
+    spec: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Build dated bad-weather events from combined track + hard_regions."""
-    wind_kn = wind_kn if wind_kn is not None else settings.weather_wind_threshold_kn
-    wave_m = wave_m if wave_m is not None else settings.weather_wave_threshold_m
-    swell_m = swell_m if swell_m is not None else settings.weather_swell_threshold_m
+    lim = weather_limits_from(spec)
+    wind_kn = wind_kn if wind_kn is not None else lim["max_wind_kn"]
+    wave_m = wave_m if wave_m is not None else lim["max_wave_m"]
+    swell_m = swell_m if swell_m is not None else lim["max_swell_m"]
 
     events: list[dict[str, Any]] = []
     track_points = track.get("track") or []
@@ -325,10 +373,17 @@ def write_weather_report(
     vessel_name: str = "",
     plan_label: str = "route plan",
     stamp: str | None = None,
+    spec: Any | None = None,
 ) -> tuple[Path, Path]:
     """Write passage PDF + extended bad_weather json under VPM_WEATHER_OUT_DIR/{voyage}/."""
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    events = extract_bad_weather_events(track)
+    lim = weather_limits_from(spec)
+    events = extract_bad_weather_events(
+        track,
+        wind_kn=lim["max_wind_kn"],
+        wave_m=lim["max_wave_m"],
+        swell_m=lim["max_swell_m"],
+    )
     rows = build_passage_weather_rows(track)
     particulars = _voyage_particulars(voyage_rec, track)
     out_dir = weather_out_dir(voyage_number)
@@ -343,9 +398,9 @@ def write_weather_report(
         "plan_label": plan_label,
         "provider": track.get("provider", ""),
         "thresholds": {
-            "wind_kn": settings.weather_wind_threshold_kn,
-            "wave_m": settings.weather_wave_threshold_m,
-            "swell_m": settings.weather_swell_threshold_m,
+            "wind_kn": lim["max_wind_kn"],
+            "wave_m": lim["max_wave_m"],
+            "swell_m": lim["max_swell_m"],
         },
         "bad_weather_events": events,
         "event_count": len(events),
@@ -405,9 +460,9 @@ def write_weather_report(
         "hard_block": format_bad_weather_block(events),
         "bad_weather_block": format_bad_weather_block(events),
         "event_count": len(events),
-        "wind_limit_kn": settings.weather_wind_threshold_kn,
-        "wave_limit_m": settings.weather_wave_threshold_m,
-        "swell_limit_m": settings.weather_swell_threshold_m,
+        "wind_limit_kn": lim["max_wind_kn"],
+        "wave_limit_m": lim["max_wave_m"],
+        "swell_limit_m": lim["max_swell_m"],
     }
     body = _fill_passage_template("passage_weather_report.txt", ctx)
     pdf_path = write_text_pdf(out_dir, f"weather_report_{stamp}.pdf", body)
@@ -462,6 +517,11 @@ if __name__ == "__main__":
     assert len(rows) == 2
     assert rows[1]["highlight"] is True
     assert beaufort_from_kn(40) == 8
+    lim = weather_limits_from()
+    assert weather_hard_reason({"windKn": lim["max_wind_kn"], "waveM": 0, "swellM": 0}, lim) == "wind"
+    assert weather_hard_reason({"windKn": lim["max_wind_kn"] - 0.01, "waveM": 0, "swellM": 0}, lim) is None
+    events = extract_bad_weather_events(sample)
+    assert events and "wind" in events[0]["reason"]
     pdf_path, json_path = write_weather_report("SELFTEST", sample, plan_label="self-check")
     assert pdf_path.suffix == ".pdf" and pdf_path.stat().st_size > 500
     assert json_path.is_file()

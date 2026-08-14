@@ -152,6 +152,50 @@
     const STORM_COLORS = ["#be123c", "#c2410c", "#a21caf", "#9f1239", "#7f1d1d"];
     const statusEl = document.getElementById("status");
     const togglesEl = document.getElementById("toggles");
+    /** Same bars as WeatherReportAgent.md — loaded from /weather_limits.json */
+    let weatherLimits = null;
+
+    function parseWeatherLimits(obj) {
+      if (!obj || typeof obj !== "object") return null;
+      const src = obj.weather_limits || obj.thresholds || obj;
+      const wind = Number(src.max_wind_kn ?? src.wind_kn);
+      const wave = Number(src.max_wave_m ?? src.wave_m);
+      const swell = Number(src.max_swell_m ?? src.swell_m);
+      if (![wind, wave, swell].some(Number.isFinite)) return null;
+      return {
+        max_wind_kn: Number.isFinite(wind) ? wind : Infinity,
+        max_wave_m: Number.isFinite(wave) ? wave : Infinity,
+        max_swell_m: Number.isFinite(swell) ? swell : Infinity,
+      };
+    }
+
+    function limitsFor(...objs) {
+      for (const o of objs) {
+        const lim = parseWeatherLimits(o);
+        if (lim) return lim;
+      }
+      return weatherLimits;
+    }
+
+    function exceedsWeatherLimits(wx, lim) {
+      if (!wx || !lim) return false;
+      if (wx.windKn != null && Number(wx.windKn) >= lim.max_wind_kn) return true;
+      if (wx.waveM != null && Number(wx.waveM) >= lim.max_wave_m) return true;
+      if (wx.swellM != null && Number(wx.swellM) >= lim.max_swell_m) return true;
+      return false;
+    }
+
+    function markHard(wx, ...objs) {
+      if (!wx) return wx;
+      const lim = limitsFor(...objs);
+      if (!lim) return wx;
+      return { ...wx, hard: exceedsWeatherLimits(wx, lim) };
+    }
+
+    fetch("weather_limits.json")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { weatherLimits = parseWeatherLimits(j); })
+      .catch(() => {});
     const shipIcon = L.divIcon({
       className: "ship-marker",
       html: "🚢",
@@ -382,6 +426,7 @@
             if (hardIdx.has(seq) || hardIdx.has(i)) {
               wx = wx ? { ...wx, hard: true } : { hard: true };
             }
+            wx = markHard(wx, data);
             return {
               seq,
               lat,
@@ -613,7 +658,7 @@
     }
 
     /** Merge six_hour_plan + weather.points (+ hardRegions / score violations). */
-    function mergePlanWeather(plan, weather, score) {
+    function mergePlanWeather(plan, weather, score, payload) {
       const pts = (weather && weather.points) || [];
       const hard = hardIndexSet(weather || {});
       if (score && Array.isArray(score.violations)) {
@@ -646,6 +691,7 @@
         } else if (isHard) {
           wx = { hard: true, reason: reasonsBySeq[seq] || reasonsBySeq[i] || "" };
         }
+        wx = markHard(wx, weather, payload);
         return {
           seq,
           lat: num(p.lat ?? p.latitude),
@@ -672,7 +718,7 @@
         const color = altColor(id, i);
         const linePts = r.route?.waypoints || r.waypoints || r.six_hour_plan || [];
         const plan = r.six_hour_plan || linePts;
-        const wxPts = mergePlanWeather(plan, r.weather, r.weather_score);
+        const wxPts = mergePlanWeather(plan, r.weather, r.weather_score, data);
         return {
           id,
           label: r.label || id,
@@ -901,8 +947,10 @@
       const vessel = info.vessel ? ` (${info.vessel})` : "";
       const wx = info.wxCount ? `, weather on ${info.wxCount} pts` : "";
       const hard = info.hardCount ? `, ${info.hardCount} hard` : "";
+      const lim = limitsFor(waypointRaw) || weatherLimits;
+      const limTxt = lim ? ` (bad ≥ ${lim.max_wind_kn} kn / ${lim.max_wave_m} m / ${lim.max_swell_m} m)` : "";
       const prov = info.provider ? ` — ${info.provider}` : "";
-      return `Track${voy}${vessel}: ${info.count} waypoints${wx}${hard}${prov}`;
+      return `Track${voy}${vessel}: ${info.count} waypoints${wx}${hard}${limTxt}${prov}`;
     }
 
     function suggestedStatus(info) {

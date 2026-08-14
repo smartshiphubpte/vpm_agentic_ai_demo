@@ -160,6 +160,10 @@ def optimize_llm(
     else:
         slim = master
 
+    from vpm_agents.tools.weather_report import weather_limits_from
+
+    llm_spec = load_agent_spec(_SPEC_NAME)
+    wx_lim = weather_limits_from()
     user_payload = {
         "optimize_for": objective,
         "waypoints": slim,
@@ -170,15 +174,11 @@ def optimize_llm(
             "edge_buffer_nm": settings.storm_edge_buffer_nm,
             "land_clearance_nm": settings.land_clearance_nm,
         },
-        "weather_limits": {
-            "max_wind_kn": settings.weather_wind_threshold_kn,
-            "max_wave_m": settings.weather_wave_threshold_m,
-            "max_swell_m": settings.weather_swell_threshold_m,
-        },
+        "weather_limits": wx_lim,
     }
     temp = 0.2
     try:
-        temp = float(load_agent_spec(_SPEC_NAME).get("temperature", 0.2))
+        temp = float(llm_spec.get("temperature", 0.2))
     except Exception:
         pass
 

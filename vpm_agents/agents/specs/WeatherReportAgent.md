@@ -30,9 +30,16 @@ Generate a templated weather report (and JSON points file) under `VPM_REPORTS_OU
 
 ```json
 {
-  "phase": "weather_reported"
+  "phase": "weather_reported",
+  "weather_limits": {
+    "max_wind_kn": 5,
+    "max_wave_m": 4.0,
+    "max_swell_m": 3.0
+  }
 }
 ```
+
+A track point is bad weather when wind, significant wave, or swell meets or exceeds these limits (or the provider already flagged it `hard`). Edit this JSON — not env vars — to change the bars.
 
 ## Writes
 

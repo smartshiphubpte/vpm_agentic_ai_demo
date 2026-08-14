@@ -131,10 +131,6 @@ class Settings:
     weather_report_on_prevoyage: bool = os.getenv(
         "VPM_WEATHER_REPORT_ON_PREVOYAGE", "true"
     ).lower() in ("1", "true", "yes")
-    weather_wind_threshold_kn: float = float(os.getenv("VPM_WEATHER_WIND_THRESHOLD_KN", "35"))
-    weather_wave_threshold_m: float = float(os.getenv("VPM_WEATHER_WAVE_THRESHOLD_M", "4.0"))
-    weather_swell_threshold_m: float = float(os.getenv("VPM_WEATHER_SWELL_THRESHOLD_M", "3.0"))
-
     @property
     def effective_llm_provider(self) -> str:
         """Resolved provider — auto-routes Gemini-shaped keys off OpenAI."""
