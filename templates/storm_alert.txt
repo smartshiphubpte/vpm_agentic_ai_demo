@@ -1,0 +1,14 @@
+# Storm alert snapshot
+Fetched: {fetched_at}
+Storm count: {count}
+Center buffer: {center_buffer_nm} NM (from storm center)
+Edge buffer: {edge_buffer_nm} NM (from storm edge / radius)
+Route encounter threshold (legacy): {threshold_nm} NM
+
+## Active storms (with progressions)
+{storm_block}
+
+## Voyage route encounters
+{encounter_block}
+
+— StormWatchAgent

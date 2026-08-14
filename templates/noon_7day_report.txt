@@ -1,0 +1,20 @@
+# Voyage noon — 7-day 6-hour waypoint + weather track
+Voyage: {voyage_number}
+Vessel: {vessel_id}
+Generated: {generated_at}
+
+## Current position 🚢
+Lat: {lat}  Lon: {lon}  Observed: {observed_at}
+
+## Route
+{source_port} → {dest_port}  |  CP speed: {cp_speed_kn} kn
+
+## Track — lat/lon, ETA, weather (🚢 = ship, 📍 = planned position)
+{waypoint_block}
+
+## Hard-weather outlook
+{hard_block}
+
+Combined JSON: see voyage_track_weather_*.json in this folder.
+
+— NoonOpsAgent

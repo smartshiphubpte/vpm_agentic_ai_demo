@@ -1,0 +1,12 @@
+# Pre-voyage route plan
+Voyage: {voyage_number}
+Vessel: {vessel_id}
+Route: {source_port} → {dest_port}
+CP speed: {cp_speed_kn} kn
+Generated: {generated_at}
+6-hour waypoints: {waypoint_count}
+
+## Waypoints (every 6 hours along master route)
+{waypoint_block}
+
+— PreVoyageIngestAgent

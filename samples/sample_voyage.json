@@ -1,0 +1,9 @@
+{
+  "departure": "Singapore",
+  "destination": "Hong Kong",
+  "waypoints": [
+    {"lat": 1.25, "lon": 103.85, "name": "Singapore"},
+    {"lat": 5.0, "lon": 108.0, "name": "SCS"},
+    {"lat": 22.3, "lon": 114.2, "name": "Hong Kong"}
+  ]
+}

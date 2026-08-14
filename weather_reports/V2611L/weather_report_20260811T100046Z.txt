@@ -1,0 +1,52 @@
+# Weather report — V2611L
+Vessel: 9184902
+Generated: 2026-08-11T10:00:46.109640+00:00
+Plan: pre-voyage 6h plan (25 points)
+Provider: Spire/NOAA-mock
+Limits: wind ≥ 35.0 kn, wave ≥ 4.0 m
+
+## Route weather (track points)
+  📍 #000  12.6635,109.4069  ETA 2026-08-11T10:00:46.108061+00:00  wind=18kn wave=1.2m
+  📍 #001  13.1626,110.2131  ETA 2026-08-11T16:00:46.108061+00:00  wind=25kn wave=1.9m
+  📍 #002  14.0510,111.1189  ETA 2026-08-11T22:00:46.108061+00:00  wind=32kn wave=2.6m
+  📍 #003  14.9394,112.0247  ETA 2026-08-12T04:00:46.108061+00:00  wind=39kn wave=3.3m
+  📍 #004  15.8377,112.9188  ETA 2026-08-12T10:00:46.108061+00:00  wind=46kn wave=4.0m
+  📍 #005  16.8826,113.6377  ETA 2026-08-12T16:00:46.108061+00:00  wind=53kn wave=1.2m
+  📍 #006  17.9276,114.3566  ETA 2026-08-12T22:00:46.108061+00:00  wind=20kn wave=1.9m
+  📍 #007  18.9725,115.0755  ETA 2026-08-13T04:00:46.108061+00:00  wind=27kn wave=2.6m
+  📍 #008  20.0254,115.7847  ETA 2026-08-13T10:00:46.108061+00:00  wind=34kn wave=3.3m
+  📍 #009  21.1022,116.4645  ETA 2026-08-13T16:00:46.108061+00:00  wind=41kn wave=4.0m
+  📍 #010  22.1790,117.1443  ETA 2026-08-13T22:00:46.108061+00:00  wind=48kn wave=1.2m
+  📍 #011  23.1997,117.9097  ETA 2026-08-14T04:00:46.108061+00:00  wind=55kn wave=1.9m
+  📍 #012  24.0602,118.8970  ETA 2026-08-14T10:00:46.108061+00:00  wind=22kn wave=2.6m
+  📍 #013  24.9171,119.8897  ETA 2026-08-14T16:00:46.108061+00:00  wind=29kn wave=3.3m
+  📍 #014  25.9642,120.6294  ETA 2026-08-14T22:00:46.108061+00:00  wind=36kn wave=4.0m
+  📍 #015  27.0315,121.3508  ETA 2026-08-15T04:00:46.108061+00:00  wind=43kn wave=1.2m
+  📍 #016  28.0825,122.1132  ETA 2026-08-15T10:00:46.108061+00:00  wind=50kn wave=1.9m
+  📍 #017  29.1747,122.8014  ETA 2026-08-15T16:00:46.108061+00:00  wind=57kn wave=2.6m
+  📍 #018  30.3154,123.3809  ETA 2026-08-15T22:00:46.108061+00:00  wind=24kn wave=3.3m
+  📍 #019  31.4389,123.2233  ETA 2026-08-16T04:00:46.108061+00:00  wind=31kn wave=4.0m
+  📍 #020  32.6097,122.9074  ETA 2026-08-16T10:00:46.108061+00:00  wind=38kn wave=1.2m
+  📍 #021  33.8581,122.8586  ETA 2026-08-16T16:00:46.108061+00:00  wind=45kn wave=1.9m
+  📍 #022  34.5746,121.8458  ETA 2026-08-16T22:00:46.108061+00:00  wind=52kn wave=2.6m
+  📍 #023  35.0560,120.4452  ETA 2026-08-17T04:00:46.108061+00:00  wind=19kn wave=3.3m
+  📍 #024  35.3693,119.5397  ETA 2026-08-17T07:52:18.169920+00:00  wind=26kn wave=4.0m
+
+## Expected bad weather — dates & reasons (15 event(s))
+  • 2026-08-12T04:00:46.108061+00:00  @ 14.9394,112.0247  — wind 39 kn exceeds limit 35.0 kn; strong wind — exceeds 35.0 kn limit
+  • 2026-08-12T10:00:46.108061+00:00  @ 15.8377,112.9188  — wind 46 kn exceeds limit 35.0 kn; significant wave height 4.0 m exceeds limit 4.0 m; swell 3.2 m exceeds limit 3.0 m; strong wind — exceeds 35.0 kn limit
+  • 2026-08-12T16:00:46.108061+00:00  @ 16.8826,113.6377  — wind 53 kn exceeds limit 35.0 kn; strong wind — exceeds 35.0 kn limit
+  • 2026-08-13T16:00:46.108061+00:00  @ 21.1022,116.4645  — wind 41 kn exceeds limit 35.0 kn; significant wave height 4.0 m exceeds limit 4.0 m; swell 3.2 m exceeds limit 3.0 m; strong wind — exceeds 35.0 kn limit
+  • 2026-08-13T22:00:46.108061+00:00  @ 22.1790,117.1443  — wind 48 kn exceeds limit 35.0 kn; strong wind — exceeds 35.0 kn limit
+  • 2026-08-14T04:00:46.108061+00:00  @ 23.1997,117.9097  — wind 55 kn exceeds limit 35.0 kn; strong wind — exceeds 35.0 kn limit
+  • 2026-08-14T22:00:46.108061+00:00  @ 25.9642,120.6294  — wind 36 kn exceeds limit 35.0 kn; significant wave height 4.0 m exceeds limit 4.0 m; swell 3.2 m exceeds limit 3.0 m; strong wind — exceeds 35.0 kn limit
+  • 2026-08-15T04:00:46.108061+00:00  @ 27.0315,121.3508  — wind 43 kn exceeds limit 35.0 kn; strong wind — exceeds 35.0 kn limit
+  • 2026-08-15T10:00:46.108061+00:00  @ 28.0825,122.1132  — wind 50 kn exceeds limit 35.0 kn; strong wind — exceeds 35.0 kn limit
+  • 2026-08-15T16:00:46.108061+00:00  @ 29.1747,122.8014  — wind 57 kn exceeds limit 35.0 kn; strong wind — exceeds 35.0 kn limit
+  • 2026-08-16T04:00:46.108061+00:00  @ 31.4389,123.2233  — significant wave height 4.0 m exceeds limit 4.0 m; swell 3.2 m exceeds limit 3.0 m; heavy seas — wave height exceeds 4.0 m limit
+  • 2026-08-16T10:00:46.108061+00:00  @ 32.6097,122.9074  — wind 38 kn exceeds limit 35.0 kn; strong wind — exceeds 35.0 kn limit
+  • 2026-08-16T16:00:46.108061+00:00  @ 33.8581,122.8586  — wind 45 kn exceeds limit 35.0 kn; strong wind — exceeds 35.0 kn limit
+  • 2026-08-16T22:00:46.108061+00:00  @ 34.5746,121.8458  — wind 52 kn exceeds limit 35.0 kn; strong wind — exceeds 35.0 kn limit
+  • 2026-08-17T07:52:18.169920+00:00  @ 35.3693,119.5397  — significant wave height 4.0 m exceeds limit 4.0 m; swell 3.2 m exceeds limit 3.0 m; heavy seas — wave height exceeds 4.0 m limit
+
+— WeatherReportAgent

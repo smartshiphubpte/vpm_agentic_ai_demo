@@ -1,0 +1,61 @@
+MARINE WEATHER & NAVIGATIONAL ADVISORY
+
+Passage Weather Report
+{vessel_display} · Voyage {voyage_number}
+{route_line}
+Report Date: {report_date}
+
+Prepared by SmartShip Hub
+
+════════════════════════════════════════════════════════════════════════
+1. Voyage Particulars & Weather Data
+
+1.1 Voyage Particulars
+  Departure Port          {departure_port}
+  Arrival Port            {arrival_port}
+  Departure Time          {departure_time}
+  Vessel Condition        {vessel_condition}
+  Distance To Go (DTG)    {dtg_nm} NM
+  Speed Through Water     {stw_kn} kts
+  CP Speed                {cp_speed_kn} kts
+  CP Consumption          {cp_consumption}
+
+1.2 Passage Weather Data ({weather_window})
+{passage_weather_table}
+{highlight_note}
+
+1.3 Summary of Reported Data
+{summary_block}
+
+════════════════════════════════════════════════════════════════════════
+2. Graphical Weather Analysis
+
+  [Chart placeholder — wind BF, wave/swell, pressure, current trend]
+  Data series available in bad_weather_*.json → passage_weather_rows
+
+2.1 Interpretation
+{interpretation_block}
+
+════════════════════════════════════════════════════════════════════════
+3. Route Advisory & Vessel Performance Recommendations
+
+3.1 Route Assessment
+{route_assessment_block}
+
+3.2 Precautions to be Taken on this Route
+{precautions_block}
+
+3.3 Forecast Outlook & Predictions
+{outlook_block}
+
+3.4 Suggestions for Optimised Vessel Performance
+{performance_block}
+
+════════════════════════════════════════════════════════════════════════
+Appendix — Expected Bad Weather ({event_count} event(s))
+{bad_weather_block}
+
+Provider: {provider}  |  Limits: wind ≥ {wind_limit_kn} kn, wave ≥ {wave_limit_m} m, swell ≥ {swell_limit_m} m
+Generated: {generated_at}
+
+Prepared by SmartShip Hub · {vessel_display} — {voyage_number}

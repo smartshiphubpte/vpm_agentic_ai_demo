@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VoyagePM — Route compare</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      color: #1a1a1a;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 12px 16px;
+      background: #0b2545;
+      color: #fff;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+    header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+    .controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+    label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
+    input[type="file"] { font-size: 0.8rem; max-width: 260px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px; font-size: 0.85rem; margin-left: auto; align-items: center; }
+    .swatch { display: inline-block; width: 24px; height: 4px; vertical-align: middle; margin-right: 6px; }
+    .master { background: #2563eb; }
+    .calc { background: #ea580c; }
+    .alt-fastest { background: #dc2626; }
+    .alt-shortest { background: #ca8a04; }
+    .alt-fuel { background: #7c3aed; }
+    .alt-safest { background: #16a34a; }
+    .alt-other { background: #0891b2; }
+    #toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 16px;
+      background: #132f4c;
+      border-top: 1px solid #1e3a5f;
+      align-items: center;
+    }
+    #toggles:empty { display: none; }
+    #toggles .tog-label {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      margin-right: 4px;
+    }
+    .tog {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      padding: 5px 12px 5px 10px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      color: #fff;
+      background: #1e3a5f;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      opacity: 1;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .tog.off {
+      opacity: 0.45;
+      background: #0f1f33;
+      text-decoration: line-through;
+    }
+    .tog .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    #map { flex: 1; min-height: 0; width: 100%; }
+    #status { font-size: 0.8rem; opacity: 0.9; min-width: 240px; max-width: 560px; }
+    .err { color: #fecaca; }
+    .ship-marker {
+      background: none;
+      border: none;
+      font-size: 22px;
+      line-height: 22px;
+      text-align: center;
+    }
+    .storm-marker {
+      background: none;
+      border: none;
+      font-size: 20px;
+      line-height: 20px;
+      text-align: center;
+    }
+    .leaflet-popup-content { font-size: 0.85rem; margin: 10px 12px; }
+    .wx-hard { color: #b91c1c; font-weight: 600; }
+    .star { font-weight: 700; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Route compare</h1>
+    <div class="controls">
+      <label>Master route JSON
+        <input type="file" id="masterFile" accept=".json,application/json" />
+      </label>
+      <label>Track / waypoints / voyage_track_weather JSON
+        <input type="file" id="waypointFile" accept=".json,application/json" />
+      </label>
+      <label>Alternatives JSON (all 4 routes)
+        <input type="file" id="suggestedFile" accept=".json,application/json" />
+      </label>
+      <label>Storms JSON
+        <input type="file" id="stormFile" accept=".json,application/json" />
+      </label>
+      <span id="status">Upload master, track, alternatives, and/or storms_*.json.</span>
+    </div>
+    <div class="legend">
+      <span>🚢 Current</span>
+      <span>🔴 Hard weather</span>
+      <span>🌀 Storm</span>
+    </div>
+  </header>
+  <div id="toggles"></div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const map = L.map("map").setView([15, 112], 5);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: "&copy; OpenStreetMap",
+    }).addTo(map);
+
+    let masterLayer = null;
+    let waypointLayer = null;
+    let suggestedLayer = null;
+    let altLayers = {}; // id -> LayerGroup
+    let masterRaw = null;
+    let waypointRaw = null;
+    let suggestedRaw = null;
+    let stormRaw = null;
+    let lastTrackInfo = null;
+    let lastSuggestedInfo = null;
+    let lastStormInfo = null;
+    /** id -> { layer, label, color, visible } */
+    const routeRegistry = {};
+    const NM_M = 1852;
+    const STORM_COLORS = ["#be123c", "#c2410c", "#a21caf", "#9f1239", "#7f1d1d"];
+    const statusEl = document.getElementById("status");
+    const togglesEl = document.getElementById("toggles");
+    const shipIcon = L.divIcon({
+      className: "ship-marker",
+      html: "🚢",
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
+    });
+    const stormIcon = L.divIcon({
+      className: "storm-marker",
+      html: "🌀",
+      iconSize: [22, 22],
+      iconAnchor: [11, 11],
+    });
+
+    function setStatus(msg, isErr) {
+      statusEl.textContent = msg;
+      statusEl.className = isErr ? "err" : "";
+    }
+
+    function registerRoute(id, label, color, layer, visible) {
+      if (routeRegistry[id]?.layer && map.hasLayer(routeRegistry[id].layer)) {
+        map.removeLayer(routeRegistry[id].layer);
+      }
+      const on = visible !== false;
+      routeRegistry[id] = { layer, label, color, visible: on };
+      if (on) layer.addTo(map);
+      rebuildToggles();
+    }
+
+    function unregisterRoute(id) {
+      const rec = routeRegistry[id];
+      if (!rec) return;
+      if (map.hasLayer(rec.layer)) map.removeLayer(rec.layer);
+      delete routeRegistry[id];
+      rebuildToggles();
+    }
+
+    function unregisterPrefix(prefix) {
+      for (const id of Object.keys(routeRegistry)) {
+        if (id === prefix || id.startsWith(prefix + ":")) unregisterRoute(id);
+      }
+    }
+
+    function setRouteVisible(id, on) {
+      const rec = routeRegistry[id];
+      if (!rec) return;
+      rec.visible = !!on;
+      if (rec.visible) {
+        if (!map.hasLayer(rec.layer)) rec.layer.addTo(map);
+      } else if (map.hasLayer(rec.layer)) {
+        map.removeLayer(rec.layer);
+      }
+      rebuildToggles();
+    }
+
+    function rebuildToggles() {
+      const ids = Object.keys(routeRegistry);
+      if (!ids.length) {
+        togglesEl.innerHTML = "";
+        return;
+      }
+      const order = ["master", "track", "suggested"];
+      ids.sort((a, b) => {
+        const aStorm = a.startsWith("storm:");
+        const bStorm = b.startsWith("storm:");
+        if (aStorm !== bStorm) return aStorm ? 1 : -1;
+        const ai = order.indexOf(a);
+        const bi = order.indexOf(b);
+        if (ai >= 0 || bi >= 0) return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+        return a.localeCompare(b);
+      });
+      togglesEl.innerHTML =
+        '<span class="tog-label">Show</span>' +
+        ids
+          .map((id) => {
+            const r = routeRegistry[id];
+            const cls = r.visible ? "tog" : "tog off";
+            return `<button type="button" class="${cls}" data-route="${id}" title="Toggle ${r.label}">
+              <span class="dot" style="background:${r.color}"></span>${r.label}
+            </button>`;
+          })
+          .join("");
+    }
+
+    togglesEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-route]");
+      if (!btn) return;
+      const id = btn.getAttribute("data-route");
+      const rec = routeRegistry[id];
+      if (!rec) return;
+      setRouteVisible(id, !rec.visible);
+    });
+
+    function num(v) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function isVoyageTrackWeather(data) {
+      return (
+        data &&
+        typeof data === "object" &&
+        !Array.isArray(data) &&
+        Array.isArray(data.track) &&
+        data.track.length > 0 &&
+        num(data.track[0].lat) != null &&
+        num(data.track[0].lon) != null
+      );
+    }
+
+    function isPlainMaster(data) {
+      if (Array.isArray(data)) {
+        const f = data[0];
+        return Array.isArray(f) && f.length >= 2;
+      }
+      return Array.isArray(data?.master_waypoints);
+    }
+
+    function hardIndexSet(data) {
+      const set = new Set();
+      const regions = (data && (data.hard_regions || data.hardRegions)) || [];
+      if (Array.isArray(regions)) {
+        for (const h of regions) {
+          if (h.index != null) set.add(Number(h.index));
+        }
+      }
+      return set;
+    }
+
+    function normalizeWeather(p) {
+      if (!p) return null;
+      if (p.weather && typeof p.weather === "object") {
+        return {
+          windKn: p.weather.windKn,
+          waveM: p.weather.waveM,
+          swellM: p.weather.swellM,
+          validTime: p.weather.validTime || p.weather.valid_time,
+          hard: !!p.weather.hard,
+        };
+      }
+      if (p.windKn != null || p.waveM != null) {
+        return {
+          windKn: p.windKn,
+          waveM: p.waveM,
+          swellM: p.swellM,
+          validTime: p.validTime || p.valid_time,
+          hard: !!p.hard,
+        };
+      }
+      return null;
+    }
+
+    function weatherLines(wx) {
+      if (!wx) return "";
+      const hard = wx.hard ? ' <span class="wx-hard">HARD</span>' : "";
+      return [
+        `Wind: ${wx.windKn ?? "?"} kn`,
+        `Wave: ${wx.waveM ?? "?"} m`,
+        `Swell: ${wx.swellM ?? "?"} m`,
+        wx.validTime ? `Valid: ${wx.validTime}` : "",
+        hard,
+      ].filter(Boolean).join("<br>");
+    }
+
+    function pointPopup(title, pt) {
+      const wx = pt.weather;
+      let html = `<strong>${title}</strong><br>Lat ${pt.lat.toFixed(5)}, Lon ${pt.lon.toFixed(5)}`;
+      if (pt.eta_utc) html += `<br>ETA ${pt.eta_utc}`;
+      if (wx) html += `<br><br>${weatherLines(wx)}`;
+      return html;
+    }
+
+    /** Normalize any supported JSON into track point objects. */
+    function normalizeTrack(data) {
+      if (typeof data !== "object" || data === null) {
+        throw new Error("expected JSON object or array");
+      }
+
+      const hardIdx = hardIndexSet(Array.isArray(data) ? null : data);
+      let arr;
+      let meta = {};
+
+      if (Array.isArray(data)) {
+        arr = data;
+      } else if (Array.isArray(data.track)) {
+        arr = data.track;
+        meta = {
+          voyage: data.voyage_number || "",
+          vessel: data.vessel_name || "",
+          provider: data.provider || "",
+        };
+      } else if (Array.isArray(data.waypoints)) {
+        arr = data.waypoints;
+      } else if (Array.isArray(data.suggested_route)) {
+        arr = data.suggested_route;
+      } else if (Array.isArray(data.master_waypoints)) {
+        arr = data.master_waypoints;
+      } else if (Array.isArray(data.points)) {
+        arr = data.points;
+        meta = { provider: data.provider || "" };
+      } else {
+        throw new Error("need track, waypoints, points, suggested_route, or master_waypoints array");
+      }
+
+      if (!arr.length) throw new Error("route is empty");
+
+      const first = arr[0];
+      if (Array.isArray(first)) {
+        return {
+          meta,
+          points: arr.map((p, i) => {
+            const lat = num(p[0]);
+            const lon = num(p[1]);
+            if (lat == null || lon == null) throw new Error(`bad coordinate at index ${i}`);
+            return { seq: i, lat, lon, is_current_position: i === 0, weather: null };
+          }),
+        };
+      }
+
+      if (first && (first.lat != null || first.latitude != null) && (first.lon != null || first.longitude != null)) {
+        return {
+          meta,
+          points: arr.map((p, i) => {
+            const lat = num(p.lat ?? p.latitude);
+            const lon = num(p.lon ?? p.longitude);
+            if (lat == null || lon == null) throw new Error(`bad coordinate at index ${i}`);
+            const seq = p.seq != null ? Number(p.seq) : i;
+            let wx = normalizeWeather(p);
+            if (hardIdx.has(seq) || hardIdx.has(i)) {
+              wx = wx ? { ...wx, hard: true } : { hard: true };
+            }
+            return {
+              seq,
+              lat,
+              lon,
+              eta_utc: p.eta_utc || p.validTime || p.valid_time,
+              is_current_position: p.is_current_position === true || i === 0,
+              weather: wx,
+              marker: p.marker,
+            };
+          }),
+        };
+      }
+
+      throw new Error("unsupported point format — expected [[lat,lon],…] or [{lat,lon,…},…]");
+    }
+
+    function parseRoutePoints(data) {
+      return normalizeTrack(data).points.map((p) => [p.lat, p.lon]);
+    }
+
+    function readFile(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            resolve(JSON.parse(reader.result));
+          } catch (e) {
+            reject(new Error("invalid JSON: " + e.message));
+          }
+        };
+        reader.onerror = () => reject(new Error("could not read file"));
+        reader.readAsText(file);
+      });
+    }
+
+    function clearMaster() {
+      unregisterRoute("master");
+      masterLayer = null;
+    }
+
+    function clearTrack() {
+      unregisterRoute("track");
+      waypointLayer = null;
+    }
+
+    const ALT_COLORS = {
+      fastest: "#dc2626",
+      shortest: "#ca8a04",
+      fuel: "#7c3aed",
+      safest: "#16a34a",
+    };
+    const ALT_FALLBACK = ["#0891b2", "#db2777", "#65a30d", "#ea580c"];
+
+    function altColor(id, index) {
+      return ALT_COLORS[id] || ALT_FALLBACK[index % ALT_FALLBACK.length];
+    }
+
+    function clearSuggested() {
+      unregisterPrefix("alt");
+      unregisterRoute("suggested");
+      altLayers = {};
+      suggestedLayer = null;
+    }
+
+    function clearStorms() {
+      unregisterPrefix("storm");
+    }
+
+    function isStormsPayload(data) {
+      if (!data || typeof data !== "object") return false;
+      if (Array.isArray(data)) {
+        return data.length > 0 && data[0] && (data[0].lat != null || data[0].positions || data[0].stormId || data[0].id);
+      }
+      return Array.isArray(data.storms) || data.stormId != null || (data.lat != null && data.lon != null && (data.radius_nm != null || data.positions));
+    }
+
+    function listStorms(data) {
+      if (!data) return [];
+      if (Array.isArray(data)) return data;
+      if (Array.isArray(data.storms)) return data.storms;
+      if (data.lat != null || data.positions || data.stormId || data.id) return [data];
+      return [];
+    }
+
+    function stormPositions(s) {
+      const pts = s.positions || s.track || [];
+      if (pts.length) {
+        return pts
+          .map((p) => ({
+            lat: num(p.lat),
+            lon: num(p.lon),
+            radius_nm: num(p.radius_nm) ?? num(s.radius_nm) ?? num(s.danger_corridor_radius_nm) ?? 0,
+            valid_time: p.valid_time || p.validAtIso || "",
+            track_phase: p.track_phase || p.trackPhase || "",
+            is_present: !!(p.is_present || p.isPresent || p.track_phase === "live" || p.trackPhase === "live"),
+            winds: p.winds ?? p.wind_kn ?? s.wind_kn,
+            label: p.label || "",
+          }))
+          .filter((p) => p.lat != null && p.lon != null);
+      }
+      const lat = num(s.lat);
+      const lon = num(s.lon);
+      if (lat == null || lon == null) return [];
+      return [{
+        lat,
+        lon,
+        radius_nm: num(s.radius_nm) ?? num(s.danger_corridor_radius_nm) ?? 0,
+        valid_time: s.valid_time || "",
+        track_phase: "live",
+        is_present: true,
+        winds: s.wind_kn,
+        label: "Current",
+      }];
+    }
+
+    function stormPopup(s, p) {
+      const name = s.name || s.displayName || s.id || s.stormId || "Storm";
+      const phase = p.label || p.track_phase || "";
+      let html = `<strong>🌀 ${name}</strong>`;
+      if (s.id || s.stormId) html += `<br>ID ${s.id || s.stormId}`;
+      if (s.category || s.status) html += `<br>${[s.category, s.status].filter(Boolean).join(" · ")}`;
+      if (phase) html += `<br>${phase}`;
+      html += `<br>Lat ${p.lat.toFixed(3)}, Lon ${p.lon.toFixed(3)}`;
+      if (p.radius_nm) html += `<br>Radius ${p.radius_nm} NM`;
+      if (p.winds != null) html += `<br>Wind ${p.winds} kn`;
+      if (p.valid_time) html += `<br>${p.valid_time}`;
+      return html;
+    }
+
+    function drawStorms(data) {
+      clearStorms();
+      const storms = listStorms(data);
+      if (!storms.length) throw new Error("no storms in JSON");
+
+      const centerBuf = num(data.center_buffer_nm) ?? num(data.threshold_nm);
+      const edgeBuf = num(data.edge_buffer_nm);
+      let drawn = 0;
+
+      storms.forEach((s, i) => {
+        const positions = stormPositions(s);
+        if (!positions.length) return;
+        const sid = s.id || s.stormId || s.storm_id || `storm-${i}`;
+        const name = s.name || s.displayName || s.storm_name || sid;
+        const color = STORM_COLORS[i % STORM_COLORS.length];
+        const group = L.layerGroup();
+        const latlngs = positions.map((p) => [p.lat, p.lon]);
+
+        if (latlngs.length > 1) {
+          L.polyline(latlngs, { color, weight: 2.5, opacity: 0.85, dashArray: "2 8" }).addTo(group);
+        }
+
+        const present = positions.find((p) => p.is_present) || positions.find((p) => p.track_phase === "live") || positions[0];
+
+        positions.forEach((p) => {
+          const isLive = p === present || p.is_present || p.track_phase === "live";
+          const isPast = p.track_phase === "past";
+          const radM = (p.radius_nm || 0) * NM_M;
+          if (radM > 0) {
+            L.circle([p.lat, p.lon], {
+              radius: radM,
+              color,
+              weight: isLive ? 2 : 1,
+              opacity: isLive ? 0.85 : isPast ? 0.25 : 0.45,
+              fillColor: color,
+              fillOpacity: isLive ? 0.18 : isPast ? 0.04 : 0.08,
+              dashArray: isLive ? undefined : "4 6",
+            })
+              .bindPopup(stormPopup(s, p))
+              .addTo(group);
+          }
+
+          if (isLive && centerBuf != null && centerBuf > 0) {
+            L.circle([p.lat, p.lon], {
+              radius: centerBuf * NM_M,
+              color: color,
+              weight: 1,
+              opacity: 0.35,
+              fill: false,
+              dashArray: "8 10",
+            })
+              .bindTooltip(`${name} center buffer ${centerBuf} NM`)
+              .addTo(group);
+          }
+          if (isLive && edgeBuf != null && edgeBuf > 0 && (p.radius_nm || 0) > 0) {
+            L.circle([p.lat, p.lon], {
+              radius: (p.radius_nm + edgeBuf) * NM_M,
+              color: "#f97316",
+              weight: 1,
+              opacity: 0.3,
+              fill: false,
+              dashArray: "2 10",
+            })
+              .bindTooltip(`${name} edge buffer +${edgeBuf} NM`)
+              .addTo(group);
+          }
+
+          L.circleMarker([p.lat, p.lon], {
+            radius: isLive ? 7 : 4,
+            color,
+            fillColor: isLive ? "#fff" : color,
+            fillOpacity: 1,
+            weight: 2,
+          })
+            .bindTooltip(`${name} · ${p.label || p.track_phase || "pt"}`, { sticky: true })
+            .bindPopup(stormPopup(s, p))
+            .addTo(group);
+        });
+
+        L.marker([present.lat, present.lon], { icon: stormIcon, zIndexOffset: 800 })
+          .bindTooltip(name)
+          .bindPopup(stormPopup(s, present))
+          .addTo(group);
+
+        registerRoute(`storm:${sid}`, `🌀 ${name}`, color, group, true);
+        drawn += 1;
+      });
+
+      if (!drawn) throw new Error("storms had no plottable positions");
+      return {
+        count: drawn,
+        centerBuf,
+        edgeBuf,
+        fetchedAt: data.fetched_at || "",
+      };
+    }
+
+    function isAlternativesPayload(data) {
+      return data && typeof data === "object" && !Array.isArray(data) && data.routes && typeof data.routes === "object";
+    }
+
+    /** Merge six_hour_plan + weather.points (+ hardRegions / score violations). */
+    function mergePlanWeather(plan, weather, score) {
+      const pts = (weather && weather.points) || [];
+      const hard = hardIndexSet(weather || {});
+      if (score && Array.isArray(score.violations)) {
+        for (const v of score.violations) {
+          if (v.seq != null) hard.add(Number(v.seq));
+        }
+      }
+      const reasonsBySeq = {};
+      if (score && Array.isArray(score.violations)) {
+        for (const v of score.violations) {
+          const key = v.seq != null ? Number(v.seq) : null;
+          if (key == null) continue;
+          reasonsBySeq[key] = (v.reasons || []).join("; ");
+        }
+      }
+      return (plan || []).map((p, i) => {
+        const wxRaw = pts[i] || null;
+        const seq = p.seq != null ? Number(p.seq) : i;
+        const isHard = hard.has(i) || hard.has(seq) || !!(wxRaw && wxRaw.hard);
+        let wx = null;
+        if (wxRaw) {
+          wx = {
+            windKn: wxRaw.windKn,
+            waveM: wxRaw.waveM,
+            swellM: wxRaw.swellM,
+            validTime: wxRaw.validTime || wxRaw.valid_time,
+            hard: isHard,
+            reason: reasonsBySeq[seq] || reasonsBySeq[i] || "",
+          };
+        } else if (isHard) {
+          wx = { hard: true, reason: reasonsBySeq[seq] || reasonsBySeq[i] || "" };
+        }
+        return {
+          seq,
+          lat: num(p.lat ?? p.latitude),
+          lon: num(p.lon ?? p.longitude),
+          eta_utc: p.eta_utc || (wxRaw && (wxRaw.validTime || wxRaw.valid_time)),
+          weather: wx,
+        };
+      }).filter((p) => p.lat != null && p.lon != null);
+    }
+
+    function pointPopupAlt(title, pt) {
+      let html = pointPopup(title, pt);
+      if (pt.weather && pt.weather.reason) {
+        html += `<br><span class="wx-hard">${pt.weather.reason}</span>`;
+      }
+      return html;
+    }
+
+    function listAlternatives(data) {
+      if (!isAlternativesPayload(data)) return null;
+      const suggestedId = data.suggested_id || "";
+      return Object.entries(data.routes).map(([key, r], i) => {
+        const id = r.id || key;
+        const color = altColor(id, i);
+        const linePts = r.route?.waypoints || r.waypoints || r.six_hour_plan || [];
+        const plan = r.six_hour_plan || linePts;
+        const wxPts = mergePlanWeather(plan, r.weather, r.weather_score);
+        return {
+          id,
+          label: r.label || id,
+          color,
+          isSuggested: id === suggestedId,
+          line: linePts.map((p) => {
+            if (Array.isArray(p)) return [num(p[0]), num(p[1])];
+            return [num(p.lat ?? p.latitude), num(p.lon ?? p.longitude)];
+          }).filter((ll) => ll[0] != null && ll[1] != null),
+          weatherPoints: wxPts,
+          score: r.weather_score || {},
+          distanceNm: r.route?.distanceNm,
+          fuelMt: r.route?.fuelMt,
+          etaHours: r.route?.etaHours,
+        };
+      });
+    }
+
+    /** Single suggested route (non-alternatives JSON). */
+    function extractSuggested(data) {
+      if (typeof data !== "object" || data === null) {
+        throw new Error("expected JSON object or array");
+      }
+      if (Array.isArray(data)) return data;
+      if (Array.isArray(data.suggested_route)) {
+        return { waypoints: data.suggested_route, label: data.suggested_route_id || data.suggested_id || "suggested" };
+      }
+      if (data.route && Array.isArray(data.route.waypoints)) {
+        return { waypoints: data.route.waypoints, label: data.label || data.id || "suggested" };
+      }
+      const wps = data.waypoints || data.points || data.six_hour_plan;
+      if (Array.isArray(wps)) {
+        return { waypoints: wps, label: data.label || data.id || "suggested" };
+      }
+      return data;
+    }
+
+    function drawMaster(latlngs) {
+      clearMaster();
+      if (!latlngs.length) return;
+      const group = L.layerGroup();
+      L.polyline(latlngs, { color: "#2563eb", weight: 4, opacity: 0.85 }).addTo(group);
+      L.circleMarker(latlngs[0], { radius: 6, color: "#2563eb", fillColor: "#fff", fillOpacity: 1, weight: 2 })
+        .bindTooltip("Master start").addTo(group);
+      L.circleMarker(latlngs[latlngs.length - 1], { radius: 6, color: "#2563eb", fillColor: "#2563eb", fillOpacity: 1, weight: 2 })
+        .bindTooltip("Master end").addTo(group);
+      masterLayer = group;
+      registerRoute("master", "Master", "#2563eb", group, true);
+    }
+
+    function drawTrack(trackData) {
+      clearTrack();
+      const { points, meta } = trackData;
+      if (!points.length) throw new Error("track has no points");
+
+      const latlngs = points.map((p) => [p.lat, p.lon]);
+      const group = L.layerGroup();
+      L.polyline(latlngs, { color: "#ea580c", weight: 3, opacity: 0.85, dashArray: "6 4" }).addTo(group);
+
+      points.forEach((pt, i) => {
+        const wx = pt.weather;
+        const isCurrent = pt.is_current_position === true || i === 0;
+        const isHard = wx && wx.hard;
+        const label = isCurrent ? "Current position" : `#${pt.seq ?? i}`;
+        const tipParts = [label];
+        if (pt.eta_utc) tipParts.push(`ETA ${pt.eta_utc}`);
+        if (wx) {
+          tipParts.push(`wind ${wx.windKn ?? "?"}kn`, `wave ${wx.waveM ?? "?"}m`);
+          if (isHard) tipParts.push("HARD");
+        }
+        const tooltip = tipParts.join(" · ");
+
+        if (isCurrent) {
+          L.marker([pt.lat, pt.lon], { icon: shipIcon, zIndexOffset: 1000 })
+            .bindTooltip(tooltip, { sticky: true })
+            .bindPopup(pointPopup("🚢 Current position", pt))
+            .addTo(group);
+          return;
+        }
+
+        const color = isHard ? "#dc2626" : "#ea580c";
+        const fill = isHard ? "#fecaca" : "#fed7aa";
+        L.circleMarker([pt.lat, pt.lon], {
+          radius: isHard ? 6 : 5,
+          color,
+          fillColor: fill,
+          fillOpacity: 1,
+          weight: isHard ? 2 : 1,
+        })
+          .bindTooltip(tooltip, { sticky: true })
+          .bindPopup(pointPopup(`Waypoint #${pt.seq ?? i}`, pt))
+          .addTo(group);
+      });
+
+      waypointLayer = group;
+      registerRoute("track", "Track", "#ea580c", group, true);
+      const wxCount = points.filter((p) => p.weather).length;
+      const hardCount = points.filter((p) => p.weather && p.weather.hard).length;
+      return {
+        count: points.length,
+        wxCount,
+        hardCount,
+        voyage: meta.voyage || "",
+        vessel: meta.vessel || "",
+        provider: meta.provider || "",
+      };
+    }
+
+    function drawSuggested(trackData, label) {
+      clearSuggested();
+      const { points } = trackData;
+      if (!points.length) throw new Error("suggested route has no points");
+
+      const latlngs = points.map((p) => [p.lat, p.lon]);
+      const group = L.layerGroup();
+      const color = "#16a34a";
+      L.polyline(latlngs, { color, weight: 3, opacity: 0.9, dashArray: "2 6" }).addTo(group);
+
+      points.forEach((pt, i) => {
+        const name = label ? `Suggested (${label})` : "Suggested";
+        const isHard = pt.weather && pt.weather.hard;
+        L.circleMarker([pt.lat, pt.lon], {
+          radius: i === 0 || i === points.length - 1 ? 6 : isHard ? 6 : 4,
+          color: isHard ? "#dc2626" : color,
+          fillColor: isHard ? "#fecaca" : i === points.length - 1 ? color : "#bbf7d0",
+          fillOpacity: 1,
+          weight: 2,
+        })
+          .bindTooltip(`${name} #${pt.seq ?? i}`, { sticky: true })
+          .bindPopup(pointPopupAlt(`${name} #${pt.seq ?? i}`, pt))
+          .addTo(group);
+      });
+
+      suggestedLayer = group;
+      registerRoute("suggested", label || "Suggested", color, group, true);
+      return { count: points.length, label: label || "", routes: 1 };
+    }
+
+    function drawAlternatives(alts) {
+      clearSuggested();
+      if (!alts.length) throw new Error("no alternative routes");
+
+      const summaries = [];
+
+      for (const alt of alts) {
+        if (!alt.line.length) continue;
+        const group = L.layerGroup();
+        const weight = alt.isSuggested ? 5 : 3;
+        const opacity = alt.isSuggested ? 0.95 : 0.75;
+        const dash = alt.isSuggested ? null : "4 6";
+        L.polyline(alt.line, {
+          color: alt.color,
+          weight,
+          opacity,
+          dashArray: dash || undefined,
+        }).addTo(group);
+
+        alt.weatherPoints.forEach((pt) => {
+          const isHard = pt.weather && pt.weather.hard;
+          const tipParts = [`${alt.label} #${pt.seq}`];
+          if (pt.eta_utc) tipParts.push(`ETA ${pt.eta_utc}`);
+          if (pt.weather) {
+            tipParts.push(`wind ${pt.weather.windKn ?? "?"}kn`, `wave ${pt.weather.waveM ?? "?"}m`);
+            if (isHard) tipParts.push("HARD");
+          }
+          L.circleMarker([pt.lat, pt.lon], {
+            radius: isHard ? 6 : alt.isSuggested ? 5 : 4,
+            color: isHard ? "#dc2626" : alt.color,
+            fillColor: isHard ? "#fecaca" : alt.color,
+            fillOpacity: isHard ? 1 : 0.55,
+            weight: isHard ? 2 : 1,
+          })
+            .bindTooltip(tipParts.join(" · "), { sticky: true })
+            .bindPopup(pointPopupAlt(`${alt.label} #${pt.seq}`, pt))
+            .addTo(group);
+        });
+
+        altLayers[alt.id] = group;
+        const togLabel = alt.isSuggested ? `${alt.label} ★` : alt.label;
+        registerRoute(`alt:${alt.id}`, togLabel, alt.color, group, true);
+
+        const hardCount = alt.weatherPoints.filter((p) => p.weather && p.weather.hard).length;
+        const wxCount = alt.weatherPoints.filter((p) => p.weather && p.weather.windKn != null).length;
+        summaries.push({
+          id: alt.id,
+          label: alt.label,
+          isSuggested: alt.isSuggested,
+          linePts: alt.line.length,
+          wxPts: alt.weatherPoints.length,
+          wxCount,
+          hardCount,
+          score: alt.score.weather_score,
+        });
+      }
+
+      suggestedLayer = L.layerGroup(Object.values(altLayers));
+      return { routes: summaries, suggestedId: (alts.find((a) => a.isSuggested) || {}).id || "" };
+    }
+
+    function fitMap() {
+      const fg = L.featureGroup();
+      for (const rec of Object.values(routeRegistry)) {
+        if (rec.visible) fg.addLayer(rec.layer);
+      }
+      if (!fg.getLayers().length) return;
+
+      try {
+        const bounds = fg.getBounds();
+        if (bounds.isValid()) {
+          map.fitBounds(bounds.pad(0.1));
+        } else if (waypointLayer) {
+          const ll = normalizeTrack(waypointRaw).points[0];
+          map.setView([ll.lat, ll.lon], 6);
+        }
+      } catch (e) {
+        console.error("fitMap", e);
+        const pts = waypointRaw ? normalizeTrack(waypointRaw).points : null;
+        if (pts && pts.length) map.setView([pts[0].lat, pts[0].lon], 6);
+      }
+      setTimeout(() => map.invalidateSize(), 100);
+    }
+
+    function trackStatus(info) {
+      if (!info) return "";
+      const voy = info.voyage ? ` ${info.voyage}` : "";
+      const vessel = info.vessel ? ` (${info.vessel})` : "";
+      const wx = info.wxCount ? `, weather on ${info.wxCount} pts` : "";
+      const hard = info.hardCount ? `, ${info.hardCount} hard` : "";
+      const prov = info.provider ? ` — ${info.provider}` : "";
+      return `Track${voy}${vessel}: ${info.count} waypoints${wx}${hard}${prov}`;
+    }
+
+    function suggestedStatus(info) {
+      if (!info) return "";
+      if (info.routes && Array.isArray(info.routes)) {
+        const bits = info.routes.map((r) => {
+          const star = r.isSuggested ? "★" : "";
+          const sc = r.score != null ? ` score=${r.score}%` : "";
+          const hard = r.hardCount ? ` ${r.hardCount} hard` : "";
+          return `${star}${r.label}:${r.wxPts}wp${sc}${hard}`;
+        });
+        return `Alts(${info.routes.length}): ${bits.join(" · ")}`;
+      }
+      const lab = info.label ? ` (${info.label})` : "";
+      return `Suggested${lab}: ${info.count} waypoints`;
+    }
+
+    function stormStatus(info) {
+      if (!info) return "";
+      const buf = info.centerBuf != null ? `, center buf ${info.centerBuf} NM` : "";
+      const edge = info.edgeBuf != null ? `, edge buf ${info.edgeBuf} NM` : "";
+      return `Storms: ${info.count}${buf}${edge}`;
+    }
+
+    function updateStatus() {
+      const parts = [];
+      if (masterRaw && masterLayer) {
+        parts.push(`Master: ${parseRoutePoints(masterRaw).length} pts`);
+      }
+      if (lastTrackInfo) parts.push(trackStatus(lastTrackInfo));
+      if (lastSuggestedInfo) parts.push(suggestedStatus(lastSuggestedInfo));
+      if (lastStormInfo) parts.push(stormStatus(lastStormInfo));
+      setStatus(parts.length ? parts.join(" | ") : "Upload JSON to display routes.");
+    }
+
+    async function loadTrackData(data) {
+      waypointRaw = data;
+      const trackData = normalizeTrack(data);
+      lastTrackInfo = drawTrack(trackData);
+      fitMap();
+      updateStatus();
+    }
+
+    async function loadSuggestedData(data) {
+      suggestedRaw = data;
+      const alts = listAlternatives(data);
+      if (alts) {
+        lastSuggestedInfo = drawAlternatives(alts);
+      } else {
+        const extracted = extractSuggested(data);
+        const label = extracted && !Array.isArray(extracted) ? extracted.label || extracted.id : "";
+        const trackData = normalizeTrack(extracted);
+        lastSuggestedInfo = drawSuggested(trackData, label);
+      }
+      fitMap();
+      updateStatus();
+    }
+
+    async function loadStormData(data) {
+      stormRaw = data;
+      lastStormInfo = drawStorms(data);
+      fitMap();
+      updateStatus();
+    }
+
+    async function loadMasterData(data) {
+      if (isVoyageTrackWeather(data)) {
+        await loadTrackData(data);
+        setStatus(`Auto-detected voyage_track_weather — ${trackStatus(lastTrackInfo)}`);
+        return;
+      }
+      if (isAlternativesPayload(data)) {
+        await loadSuggestedData(data);
+        return;
+      }
+      if (isStormsPayload(data) && (data.storms || Array.isArray(data))) {
+        await loadStormData(data);
+        return;
+      }
+      masterRaw = data;
+      const pts = parseRoutePoints(data);
+      drawMaster(pts);
+      fitMap();
+      updateStatus();
+    }
+
+    async function onMaster(file) {
+      if (!file) return;
+      const data = await readFile(file);
+      await loadMasterData(data);
+    }
+
+    async function onWaypoint(file) {
+      if (!file) return;
+      const data = await readFile(file);
+      if (isStormsPayload(data) && data.storms) {
+        await loadStormData(data);
+        return;
+      }
+      if (isAlternativesPayload(data)) {
+        await loadSuggestedData(data);
+        return;
+      }
+      if (isPlainMaster(data) && !isVoyageTrackWeather(data)) {
+        masterRaw = data;
+        drawMaster(parseRoutePoints(data));
+      } else {
+        await loadTrackData(data);
+      }
+      fitMap();
+      updateStatus();
+    }
+
+    async function onSuggested(file) {
+      if (!file) return;
+      const data = await readFile(file);
+      await loadSuggestedData(data);
+    }
+
+    async function onStorm(file) {
+      if (!file) return;
+      const data = await readFile(file);
+      await loadStormData(data);
+    }
+
+    document.getElementById("masterFile").addEventListener("change", (e) => {
+      onMaster(e.target.files[0]).catch((err) => {
+        console.error(err);
+        setStatus(err.message, true);
+      });
+      e.target.value = "";
+    });
+    document.getElementById("waypointFile").addEventListener("change", (e) => {
+      onWaypoint(e.target.files[0]).catch((err) => {
+        console.error(err);
+        setStatus(err.message, true);
+      });
+      e.target.value = "";
+    });
+    document.getElementById("suggestedFile").addEventListener("change", (e) => {
+      onSuggested(e.target.files[0]).catch((err) => {
+        console.error(err);
+        setStatus(err.message, true);
+      });
+      e.target.value = "";
+    });
+    document.getElementById("stormFile").addEventListener("change", (e) => {
+      onStorm(e.target.files[0]).catch((err) => {
+        console.error(err);
+        setStatus(err.message, true);
+      });
+      e.target.value = "";
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,190 @@
+{
+  "voyage_number": "V2611L",
+  "vessel_id": "9184902",
+  "vessel_name": "Condor Express",
+  "generated_at": "2026-08-11T10:00:46.109640+00:00",
+  "plan_label": "pre-voyage 6h plan",
+  "provider": "Spire/NOAA-mock",
+  "thresholds": {
+    "wind_kn": 35.0,
+    "wave_m": 4.0,
+    "swell_m": 3.0
+  },
+  "bad_weather_events": [
+    {
+      "date": "2026-08-12T04:00:46.108061+00:00",
+      "lat": 14.93941,
+      "lon": 112.02473,
+      "seq": 3,
+      "reasons": [
+        "wind 39 kn exceeds limit 35.0 kn",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 39 kn exceeds limit 35.0 kn; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-12T10:00:46.108061+00:00",
+      "lat": 15.83768,
+      "lon": 112.91875,
+      "seq": 4,
+      "reasons": [
+        "wind 46 kn exceeds limit 35.0 kn",
+        "significant wave height 4.0 m exceeds limit 4.0 m",
+        "swell 3.2 m exceeds limit 3.0 m",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 46 kn exceeds limit 35.0 kn; significant wave height 4.0 m exceeds limit 4.0 m; swell 3.2 m exceeds limit 3.0 m; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-12T16:00:46.108061+00:00",
+      "lat": 16.88263,
+      "lon": 113.63767,
+      "seq": 5,
+      "reasons": [
+        "wind 53 kn exceeds limit 35.0 kn",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 53 kn exceeds limit 35.0 kn; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-13T16:00:46.108061+00:00",
+      "lat": 21.10219,
+      "lon": 116.4645,
+      "seq": 9,
+      "reasons": [
+        "wind 41 kn exceeds limit 35.0 kn",
+        "significant wave height 4.0 m exceeds limit 4.0 m",
+        "swell 3.2 m exceeds limit 3.0 m",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 41 kn exceeds limit 35.0 kn; significant wave height 4.0 m exceeds limit 4.0 m; swell 3.2 m exceeds limit 3.0 m; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-13T22:00:46.108061+00:00",
+      "lat": 22.17896,
+      "lon": 117.14432,
+      "seq": 10,
+      "reasons": [
+        "wind 48 kn exceeds limit 35.0 kn",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 48 kn exceeds limit 35.0 kn; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-14T04:00:46.108061+00:00",
+      "lat": 23.19972,
+      "lon": 117.90972,
+      "seq": 11,
+      "reasons": [
+        "wind 55 kn exceeds limit 35.0 kn",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 55 kn exceeds limit 35.0 kn; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-14T22:00:46.108061+00:00",
+      "lat": 25.96418,
+      "lon": 120.62935,
+      "seq": 14,
+      "reasons": [
+        "wind 36 kn exceeds limit 35.0 kn",
+        "significant wave height 4.0 m exceeds limit 4.0 m",
+        "swell 3.2 m exceeds limit 3.0 m",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 36 kn exceeds limit 35.0 kn; significant wave height 4.0 m exceeds limit 4.0 m; swell 3.2 m exceeds limit 3.0 m; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-15T04:00:46.108061+00:00",
+      "lat": 27.03146,
+      "lon": 121.35082,
+      "seq": 15,
+      "reasons": [
+        "wind 43 kn exceeds limit 35.0 kn",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 43 kn exceeds limit 35.0 kn; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-15T10:00:46.108061+00:00",
+      "lat": 28.0825,
+      "lon": 122.11315,
+      "seq": 16,
+      "reasons": [
+        "wind 50 kn exceeds limit 35.0 kn",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 50 kn exceeds limit 35.0 kn; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-15T16:00:46.108061+00:00",
+      "lat": 29.1747,
+      "lon": 122.80139,
+      "seq": 17,
+      "reasons": [
+        "wind 57 kn exceeds limit 35.0 kn",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 57 kn exceeds limit 35.0 kn; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-16T04:00:46.108061+00:00",
+      "lat": 31.43891,
+      "lon": 123.22334,
+      "seq": 19,
+      "reasons": [
+        "significant wave height 4.0 m exceeds limit 4.0 m",
+        "swell 3.2 m exceeds limit 3.0 m",
+        "heavy seas \u2014 wave height exceeds 4.0 m limit"
+      ],
+      "reason": "significant wave height 4.0 m exceeds limit 4.0 m; swell 3.2 m exceeds limit 3.0 m; heavy seas \u2014 wave height exceeds 4.0 m limit"
+    },
+    {
+      "date": "2026-08-16T10:00:46.108061+00:00",
+      "lat": 32.60965,
+      "lon": 122.90737,
+      "seq": 20,
+      "reasons": [
+        "wind 38 kn exceeds limit 35.0 kn",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 38 kn exceeds limit 35.0 kn; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-16T16:00:46.108061+00:00",
+      "lat": 33.85814,
+      "lon": 122.85856,
+      "seq": 21,
+      "reasons": [
+        "wind 45 kn exceeds limit 35.0 kn",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 45 kn exceeds limit 35.0 kn; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-16T22:00:46.108061+00:00",
+      "lat": 34.57465,
+      "lon": 121.84579,
+      "seq": 22,
+      "reasons": [
+        "wind 52 kn exceeds limit 35.0 kn",
+        "strong wind \u2014 exceeds 35.0 kn limit"
+      ],
+      "reason": "wind 52 kn exceeds limit 35.0 kn; strong wind \u2014 exceeds 35.0 kn limit"
+    },
+    {
+      "date": "2026-08-17T07:52:18.169920+00:00",
+      "lat": 35.369333,
+      "lon": 119.53975,
+      "seq": 24,
+      "reasons": [
+        "significant wave height 4.0 m exceeds limit 4.0 m",
+        "swell 3.2 m exceeds limit 3.0 m",
+        "heavy seas \u2014 wave height exceeds 4.0 m limit"
+      ],
+      "reason": "significant wave height 4.0 m exceeds limit 4.0 m; swell 3.2 m exceeds limit 3.0 m; heavy seas \u2014 wave height exceeds 4.0 m limit"
+    }
+  ],
+  "event_count": 15,
+  "track_point_count": 25
+}

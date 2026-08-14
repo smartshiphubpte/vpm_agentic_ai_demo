@@ -1,0 +1,2 @@
+voyage_number,vessel_id,source_port,dest_port,cp_speed_kn,alert_emails,waypoints
+VYG-2026-001,IMO9234567,Singapore,Rotterdam,12.5,ops@acme.com|wx@acme.com,1.25,103.85;5.0,95.0;10.0,80.0;15.0,65.0;20.0,50.0;25.0,35.0;30.0,20.0;35.0,10.0;51.9,4.5

@@ -1,0 +1,14 @@
+# Weather report — {voyage_number}
+Vessel: {vessel_id}
+Generated: {generated_at}
+Plan: {plan_label} ({waypoint_count} points)
+Provider: {provider}
+Limits: wind ≥ {wind_limit_kn} kn, wave ≥ {wave_limit_m} m
+
+## Route weather (track points)
+{weather_block}
+
+## Expected bad weather — dates & reasons ({event_count} event(s))
+{bad_weather_block}
+
+— WeatherReportAgent

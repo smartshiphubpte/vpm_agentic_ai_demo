@@ -1,0 +1,59 @@
+TROPICAL CYCLONE VESSEL ALERT REPORT
+
+{vessel_display} · Voyage {voyage_number}
+{route_line}
+Report Date: {report_date}
+
+════════════════════════════════════════════════════════════════════════
+SYSTEM SUMMARY
+
+  WIND SPEED AT NEAREST FIX     {wind_at_fix_kn} kn ({wind_bf} BF · direction {wind_dir_deg}°)
+  POSITION ({waypoint_label})   {position_dms}
+  SEA STATE                     {wave_m} m sig. wave ({wave_dir_label})
+  FIX TIMESTAMP                 {fix_timestamp}
+
+  Swell {swell_m} m @ {swell_dir_label}  |  Current {current_kn} kn @ {current_dir_deg}°
+  CPA to system center: ~{cpa_nm} NM
+
+Synopsis
+{synopsis_block}
+
+════════════════════════════════════════════════════════════════════════
+Storm: {storm_name} ({storm_id})  |  Category: {storm_category}
+Center: {storm_center_dms}  |  Radius: {storm_radius_nm} NM
+Geo-fence: {center_buffer_nm} NM from departure  |  Edge buffer: {edge_buffer_nm} NM
+
+How to read this for route planning
+  The danger corridor is the area flagged around the tracked system's forecast
+  track. The {center_buffer_nm} NM geo-fence around the departure area triggers
+  this advisory when an active system enters that radius or the planned route
+  crosses the corridor within the forecast window.
+
+Distances & Bearings from System Center
+{reference_locations_table}
+
+════════════════════════════════════════════════════════════════════════
+Waypoint Detail Summary
+
+  Position          {position_dms}
+  Waypoint seq      {waypoint_seq}
+  Timestamp         {fix_timestamp}
+  Wind              {wind_at_fix_kn} kn ({wind_bf} BF) from {wind_dir_deg}°
+  Sig. wave         {wave_m} m from {wave_dir_label}
+  Swell             {swell_m} m from {swell_dir_label}
+  Current           {current_kn} kn @ {current_dir_deg}°
+
+  [Chart placeholder — wind/sea bar chart at nearest track point]
+  [Chart placeholder — vessel proximity trend vs system center]
+
+════════════════════════════════════════════════════════════════════════
+Outlook & Confidence
+{outlook_block}
+
+Recommended Actions for Master / Route Planner
+{recommended_actions_block}
+
+Safest route recommendation: {safest_route_note}
+
+Generated: {generated_at}  |  Source: {storm_source}
+Prepared by SmartShip Hub
