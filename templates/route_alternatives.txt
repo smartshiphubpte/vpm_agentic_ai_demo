@@ -1,12 +1,14 @@
 # Route alternatives — {voyage_number} ({trigger})
 Vessel: {vessel_id}
 Generated: {generated_at}
-Horizon: {horizon_hours} h @ {interval_hours} h steps
-Hard rule: no landmass (ship must stay on water); origin/destination lat/lon fixed
+Horizon: {horizon_hours} @ {interval_hours} h steps
+Hard rule: no landmass (points and legs stay on water); origin/destination fixed
 Weather limits: wind ≤ {max_wind_kn} kn, wave ≤ {max_wave_m} m, swell ≤ {max_swell_m} m
 Weather relaxed: {weather_relaxed}  |  Rejected for land: {rejected_for_land}
-Storm buffers: center ≥ {center_buffer_nm} NM, edge ≥ {edge_buffer_nm} NM
+Storm buffers (soft): center ≥ {center_buffer_nm} NM, edge ≥ {edge_buffer_nm} NM
 Suggested: {suggested_id}
+
+Fuel is listed only when CP consumption (MT/day) was provided.
 
 {alternatives_block}
 

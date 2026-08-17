@@ -8,24 +8,25 @@ against weather limits **and** storm center/edge buffers.
 
 ## Hard rules
 
-1. **No landmass** — a ship route must stay on water and at least
-   `VPM_LAND_CLEARANCE_NM` clear of land. Any alternate whose waypoints / 6h plan
-   samples land (or under-clearance water) is **rejected** and never suggested.
-   Conventional optimize builds coast-edge nodes from land rings so paths go
-   *around* continents instead of cutting chords.
-2. **Fixed endpoints** — origin and destination lat/lon are immutable; only
-   intermediate waypoints may move. Optimizer output is pinned to the input
-   start/end before scoring.
-3. Soft rules (weather limits, storm buffers) may be **loosened** only when no
-   land-safe alternate remains under the nominal caps. Land and endpoint rules
-   are never loosened.
+1. **No landmass** — the only hard constraint: no waypoint and no interpolated
+   leg may sit on land. `VPM_LAND_CLEARANCE_NM` is a preferred standoff for graph
+   nodes, **not** a reject. Conventional A* (default) builds a sea-only graph.
+2. **Fixed endpoints** — origin and destination lat/lon are immutable.
+3. Storm buffers and weather limits are **soft** (scored / optional keep-out on
+   safest). They may be loosened. Land and endpoints are never loosened.
 
 ## Objective
 
-Use weather along the plan plus active storm progressions to suggest **fastest**,
-**shortest**, **least fuel**, and **safest** routes among **sea-clear** candidates.
-Prefer routes that keep every waypoint outside `VPM_STORM_CENTER_BUFFER_NM` of
-any storm center and outside `VPM_STORM_EDGE_BUFFER_NM` of the storm edge (radius).
+Same sea graph, four costs at **fixed CP speed**:
+- **shortest** / **fastest** — distance (fastest ≡ shortest at fixed speed)
+- **least fuel** — MT from CP consumption × days; if consumption is missing,
+  ranks as distance and fuel is **omitted** from the pre-departure report
+- **safest** — distance + storm/weather cost
+
+Report for every published route: distance, days, weather along the track, and
+fuel only when consumption was provided.
+
+Prefer routes that keep waypoints outside storm buffers when a sea-clear detour exists.
 
 Runs at:
 - **pre-voyage** when the daemon flow includes `route_optimize`
@@ -54,7 +55,8 @@ Runs at:
 | `weather_route` | Weather along 6h plan |
 | `score` | Weather + storm violations |
 
-Live mode defaults to **local** optimize (`VPM_ROUTE_OPT_METHOD=conventional|llm`); set `backend` only if voyagepm_be VO is available.
+Live mode defaults to **conventional A\*** (`VPM_ROUTE_OPT_METHOD=conventional`,
+`VPM_ROUTE_OPT_ALGO=astar`). LLM is optional and must still pass the land check.
 
 ## Defaults
 

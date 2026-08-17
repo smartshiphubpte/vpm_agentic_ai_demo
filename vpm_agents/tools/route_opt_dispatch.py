@@ -12,13 +12,18 @@ def optimize_local(
     waypoints: list,
     weather: dict | None = None,
     storms: list | None = None,
+    *,
+    speed_kn: float | None = None,
+    fuel_mt_day: float | None = None,
 ) -> dict[str, Any]:
     method = (settings.route_opt_method or "conventional").strip().lower()
     if method == "llm":
         from vpm_agents.tools.route_opt_llm import optimize_llm
 
         return optimize_llm(objective, waypoints, weather, storms)
-    # default / conventional
     from vpm_agents.tools.route_opt_conventional import optimize_conventional
 
-    return optimize_conventional(objective, waypoints, weather, storms)
+    return optimize_conventional(
+        objective, waypoints, weather, storms,
+        speed_kn=speed_kn, fuel_mt_day=fuel_mt_day,
+    )

@@ -1,23 +1,26 @@
-"""Local route optimize via Dijkstra / A* (no voyagepm_be).
+"""Local conventional route optimize: A*/Dijkstra on a sea-only graph.
 
-Hard rules:
-  - Never place intermediate nodes on land or within VPM_LAND_CLEARANCE_NM of land.
-  - Never connect two nodes with a leg that crosses land / under-clearance water.
-  - Land-ring edges become seaward coast nodes so paths go *around* continents.
-  - Origin/destination lat/lon stay fixed (endpoints pinned after search).
+Hard rule: land is impassable (points and legs). Storms/weather are costs, not walls
+(safest tries storm keep-out first, then soft). Speed is fixed. Fuel cost is used
+only when CP consumption (MT/day) is provided; otherwise fuel ranks as distance.
+
+At fixed speed (and fixed MT/day) shortest ≈ fastest ≈ fuel; safest detours storms.
 """
 
 from __future__ import annotations
 
 import heapq
 import math
+import time
 from functools import lru_cache
 from typing import Any
 
 from vpm_agents.config import settings
+from vpm_agents.tools.agent_log import progress
 from vpm_agents.tools.geo import haversine_nm
 from vpm_agents.tools.land_mask import (
     coast_edge_nodes,
+    distance_to_land_nm,
     is_navigable,
     leg_is_navigable,
     nudge_off_land,
@@ -26,10 +29,17 @@ from vpm_agents.tools.land_mask import (
 from vpm_agents.tools.storm_normalize import normalize_active_storms
 from vpm_agents.tools.storm_proximity import point_violates_storm
 
-_OFFSETS_NM = (0.0, 50.0, 100.0, 160.0, -50.0, -100.0, -160.0)
+_OFFSETS_NM = (0.0, 40.0, 80.0, 140.0, 220.0, 300.0, -40.0, -80.0, -140.0, -220.0, -300.0)
 _MAX_LINK_NM = 1200.0
 _K_NEAREST = 14
 _MAX_COAST_NODES = 64
+# voyagepm_be route_optimization_common/search_fan.py defaults
+_FAN_HOURS = (6.0, 12.0, 18.0, 24.0)
+_FAN_SPEED_KTS = 12.0
+_FAN_HALF_ARC = 90
+_FAN_STEP = 30
+_MIN_KTS = 0.1
+_DEFAULT_SPEED_KN = 12.0
 
 
 def _as_pts(waypoints: list) -> list[dict[str, float]]:
@@ -93,13 +103,15 @@ def _leg_ok_cached(
         {"lat": a_lat, "lon": a_lon},
         {"lat": b_lat, "lon": b_lon},
         clearance_nm=clearance_nm,
-        sample_nm=25.0,
+        sample_nm=12.0,
     )
 
 
-def _storm_penalty(lat: float, lon: float, storms: list[dict]) -> float:
+def _storm_check(lat: float, lon: float, storms: list[dict]) -> tuple[bool, float]:
+    """Return (hard_violates, caution_penalty). BE: hard keep-out + safest caution ring."""
     if not storms:
-        return 0.0
+        return False, 0.0
+    violates = False
     pen = 0.0
     for s in storms:
         positions = s.get("positions") or [
@@ -120,6 +132,7 @@ def _storm_penalty(lat: float, lon: float, storms: list[dict]) -> float:
                 edge_buffer_nm=settings.storm_edge_buffer_nm,
             )
             if check["violates"]:
+                violates = True
                 pen += 800.0 + max(
                     0.0, settings.storm_center_buffer_nm - check["distance_to_center_nm"]
                 )
@@ -128,7 +141,22 @@ def _storm_penalty(lat: float, lon: float, storms: list[dict]) -> float:
                 soft = settings.storm_center_buffer_nm * 1.5
                 if d < soft:
                     pen += (soft - d) * 0.15
-    return pen
+    return violates, pen
+
+
+def _storm_penalty(lat: float, lon: float, storms: list[dict]) -> float:
+    return _storm_check(lat, lon, storms)[1]
+
+
+def _leg_storm_blocked(a: dict[str, float], b: dict[str, float], storms: list[dict]) -> bool:
+    if not storms:
+        return False
+    for t in (0.0, 0.25, 0.5, 0.75, 1.0):
+        lat = a["lat"] * (1.0 - t) + b["lat"] * t
+        lon = a["lon"] * (1.0 - t) + b["lon"] * t
+        if _storm_check(lat, lon, storms)[0]:
+            return True
+    return False
 
 
 def _weather_factor(weather: dict | None) -> float:
@@ -150,6 +178,10 @@ def _edge_cost(
     objective: str,
     storms: list[dict],
     wx_f: float,
+    *,
+    storm_soft: bool,
+    speed_kn: float,
+    fuel_mt_day: float | None,
 ) -> float:
     dist = haversine_nm(a["lat"], a["lon"], b["lat"], b["lon"])
     mid_lat = (a["lat"] + b["lat"]) / 2.0
@@ -159,14 +191,17 @@ def _edge_cost(
         + _storm_penalty(b["lat"], b["lon"], storms)
         + _storm_penalty(mid_lat, mid_lon, storms)
     ) / 3.0
+    sog = max(_MIN_KTS, float(speed_kn) or _DEFAULT_SPEED_KN)
+    hours = dist / sog
     obj = (objective or "shortest").lower()
-    if obj in ("shortest",):
-        return dist + storm * 0.05
-    if obj in ("fastest",):
-        return dist * (1.0 + 0.08 * wx_f) + storm * 0.1
+    if obj in ("shortest", "fastest"):
+        return dist
     if obj in ("fuel", "lowest-fuel"):
-        return dist * (1.0 + 0.25 * wx_f + min(1.0, storm / 500.0) * 0.35) + storm * 0.2
-    return dist + storm * 4.0 + wx_f * dist * 0.2
+        if fuel_mt_day is not None:
+            return hours * float(fuel_mt_day)
+        return dist
+    # safest: distance + storm (and weather) — land never appears here
+    return dist + (storm * 2.5 if storm_soft else 0.0) + wx_f * dist * 0.4
 
 
 def _route_length_nm(master: list[dict[str, float]]) -> float:
@@ -185,6 +220,26 @@ def _dist_to_route_nm(p: dict[str, float], master: list[dict[str, float]]) -> fl
         mid = {"lat": (a["lat"] + b["lat"]) / 2, "lon": (a["lon"] + b["lon"]) / 2}
         best = min(best, haversine_nm(p["lat"], p["lon"], mid["lat"], mid["lon"]))
     return best
+
+
+def _densify_master(master: list[dict[str, float]], step_nm: float = 90.0) -> list[dict[str, float]]:
+    if len(master) < 2:
+        return list(master)
+    out = [master[0]]
+    for i in range(len(master) - 1):
+        a, b = master[i], master[i + 1]
+        dist = haversine_nm(a["lat"], a["lon"], b["lat"], b["lon"])
+        n = max(1, int(math.ceil(dist / max(step_nm, 20.0))))
+        for k in range(1, n):
+            t = k / n
+            out.append(
+                {
+                    "lat": a["lat"] + (b["lat"] - a["lat"]) * t,
+                    "lon": a["lon"] + (b["lon"] - a["lon"]) * t,
+                }
+            )
+        out.append(b)
+    return out
 
 
 def _voyage_bbox(
@@ -222,13 +277,26 @@ def _build_nodes(
         seen.add(key)
         nodes.append({"lat": p["lat"], "lon": p["lon"]})
 
-    # Corridor fans at intermediates
-    for i in range(1, len(master) - 1):
-        prev, cur, nxt = master[i - 1], master[i], master[min(i + 1, len(master) - 1)]
+    # Corridor fans at densified master points (2-point land chords get sea lanes)
+    spine = _densify_master(master, step_nm=90.0)
+    for i in range(1, len(spine) - 1):
+        prev, cur, nxt = spine[i - 1], spine[i], spine[min(i + 1, len(spine) - 1)]
         br = _bearing_deg(prev, nxt)
         perp = (br + 90.0) % 360.0
         for nm in _OFFSETS_NM:
             _add(_offset_point(cur, perp, nm, clearance_nm))
+
+    # BE search_fan: ±90° of dest heading at 6/12/18/24h * 12 kts
+    anchors = master[:-1]
+    if len(anchors) > 12:
+        step = max(1, len(anchors) // 12)
+        anchors = anchors[::step]
+    for cur in anchors:
+        heading = _bearing_deg(cur, dest)
+        for rel in range(-_FAN_HALF_ARC, _FAN_HALF_ARC + 1, _FAN_STEP):
+            br = (heading + rel) % 360.0
+            for hours in _FAN_HOURS:
+                _add(_offset_point(cur, br, hours * _FAN_SPEED_KTS, clearance_nm))
 
     # Coast-edge nodes near this voyage (wide bbox when master crosses land)
     bbox = _voyage_bbox(master)
@@ -310,15 +378,13 @@ def _ensure_terminal_links(
                 cands.append((d, j))
         cands.sort()
         for _d, j in cands[:30]:
-            if not _terminal_leg_ok(nodes[terminal], nodes[j], max(0.0, clearance_nm * 0.5)):
-                if not _leg_ok_cached(
-                    round(nodes[terminal]["lat"], 4),
-                    round(nodes[terminal]["lon"], 4),
-                    round(nodes[j]["lat"], 4),
-                    round(nodes[j]["lon"], 4),
-                    0.0,
-                ):
+            if j in (start_i, goal_i) and j != terminal:
+                if not score_route_land(
+                    [nodes[terminal], nodes[j]], sample_nm=10.0, clearance_nm=0.0
+                )["sea_clear"]:
                     continue
+            if not _terminal_leg_ok(nodes[terminal], nodes[j], max(0.0, clearance_nm * 0.5)):
+                continue
             if j not in adj[terminal]:
                 adj[terminal].append(j)
             if terminal not in adj[j]:
@@ -338,7 +404,7 @@ def _terminal_leg_ok(
     samples = _sample_leg(
         [terminal["lat"], terminal["lon"]],
         [other["lat"], other["lon"]],
-        25.0,
+        12.0,
     )
     for i, (lat, lon) in enumerate(samples):
         if i == 0:
@@ -419,6 +485,9 @@ def _search(
     wx_f: float,
     *,
     use_astar: bool,
+    hard_storm: bool = False,
+    speed_kn: float = _DEFAULT_SPEED_KN,
+    fuel_mt_day: float | None = None,
 ) -> list[dict[str, float]] | None:
     goal = nodes[goal_i]
 
@@ -431,9 +500,23 @@ def _search(
     pq: list[tuple[float, float, int]] = [(h(start_i), 0.0, start_i)]
     best_g: dict[int, float] = {start_i: 0.0}
     parent: dict[int, int | None] = {start_i: None}
+    t0 = time.monotonic()
+    last_hb = t0
+    expanded = 0
 
     while pq:
         _f, g, i = heapq.heappop(pq)
+        expanded += 1
+        now = time.monotonic()
+        if now - last_hb >= 15.0:
+            progress(
+                "RouteOptimize",
+                f"search in progress objective={objective} expanded={expanded} "
+                f"frontier={len(pq)} visited={len(best_g)}",
+                phase="search",
+                elapsed_s=now - t0,
+            )
+            last_hb = now
         if g > best_g.get(i, float("inf")) + 1e-9:
             continue
         if i == goal_i:
@@ -445,7 +528,12 @@ def _search(
             path_i.reverse()
             return [nodes[k] for k in path_i]
         for j in adj[i]:
-            ng = g + _edge_cost(nodes[i], nodes[j], objective, storms, wx_f)
+            if hard_storm and _leg_storm_blocked(nodes[i], nodes[j], storms):
+                continue
+            ng = g + _edge_cost(
+                nodes[i], nodes[j], objective, storms, wx_f,
+                storm_soft=not hard_storm, speed_kn=speed_kn, fuel_mt_day=fuel_mt_day,
+            )
             if ng + 1e-9 < best_g.get(j, float("inf")):
                 best_g[j] = ng
                 parent[j] = i
@@ -453,19 +541,24 @@ def _search(
     return None
 
 
-def _metrics(path: list[dict[str, float]], objective: str) -> dict[str, float]:
+def _metrics(
+    path: list[dict[str, float]],
+    speed_kn: float,
+    fuel_mt_day: float | None,
+) -> dict[str, Any]:
     dist = 0.0
     for i in range(len(path) - 1):
         dist += haversine_nm(
             path[i]["lat"], path[i]["lon"], path[i + 1]["lat"], path[i + 1]["lon"]
         )
-    obj = (objective or "").lower()
-    fuel_rate = 0.18 if obj in ("fuel", "lowest-fuel") else 0.22
-    speed = 14.5 if obj == "fastest" else 12.0
+    sog = max(_MIN_KTS, float(speed_kn) or _DEFAULT_SPEED_KN)
+    hours = dist / sog if sog else 0.0
+    fuel = round(hours / 24.0 * float(fuel_mt_day), 1) if fuel_mt_day is not None else None
     return {
         "distanceNm": round(dist, 1),
-        "fuelMt": round(dist * fuel_rate, 1),
-        "etaHours": round(dist / speed, 1) if speed else 0.0,
+        "fuelMt": fuel,
+        "etaHours": round(hours, 1),
+        "days": round(hours / 24.0, 2),
     }
 
 
@@ -477,18 +570,107 @@ def _simplify(path: list[dict[str, float]], clearance_nm: float) -> list[dict[st
     while i < len(path) - 1:
         best = i + 1
         for j in range(len(path) - 1, i + 1, -1):
+            d = haversine_nm(path[i]["lat"], path[i]["lon"], path[j]["lat"], path[j]["lon"])
+            if d > 380.0:
+                continue
             if _leg_ok_cached(
                 round(path[i]["lat"], 4),
                 round(path[i]["lon"], 4),
                 round(path[j]["lat"], 4),
                 round(path[j]["lon"], 4),
-                clearance_nm if i > 0 else 0.0,
+                max(0.0, clearance_nm),
             ):
                 best = j
                 break
         out.append(path[best])
         i = best
     return out
+
+
+def _seaward_midpoint(
+    a: dict[str, float],
+    b: dict[str, float],
+    clearance_nm: float,
+    offset_nm: float,
+) -> dict[str, float] | None:
+    mid = {"lat": (a["lat"] + b["lat"]) / 2.0, "lon": (a["lon"] + b["lon"]) / 2.0}
+    br = _bearing_deg(a, b)
+    best = None
+    best_d = -1.0
+    for rel in (90.0, 270.0):
+        p = _offset_point(mid, (br + rel) % 360.0, offset_nm, max(5.0, clearance_nm * 0.4))
+        if not p:
+            continue
+        d = distance_to_land_nm(p["lat"], p["lon"])
+        if d > best_d:
+            best_d = d
+            best = p
+    return best
+
+
+def _repair_land_legs(
+    path: list[dict[str, float]],
+    clearance_nm: float,
+    *,
+    depth: int = 0,
+) -> list[dict[str, float]]:
+    """Insert seaward waypoints on any leg the land mask still flags (used during build)."""
+    if depth > 8 or len(path) < 2:
+        return path
+    out = [path[0]]
+    grew = False
+    for b in path[1:]:
+        a = out[-1]
+        if score_route_land([a, b], sample_nm=8.0, clearance_nm=0.0)["sea_clear"]:
+            out.append(b)
+            continue
+        grew = True
+        placed = False
+        for nm in (40.0, 80.0, 120.0, 180.0, 260.0):
+            p = _seaward_midpoint(a, b, clearance_nm, nm)
+            if not p:
+                continue
+            ok_a = score_route_land([a, p], sample_nm=8.0, clearance_nm=0.0)["sea_clear"]
+            ok_b = score_route_land([p, b], sample_nm=8.0, clearance_nm=0.0)["sea_clear"]
+            if ok_a and ok_b:
+                out.append(p)
+                out.append(b)
+                placed = True
+                break
+        if not placed:
+            out.append(b)
+    if grew:
+        return _repair_land_legs(out, clearance_nm, depth=depth + 1)
+    return out
+
+
+def ensure_sea_route(
+    waypoints: list,
+    *,
+    origin: dict[str, float] | list | None = None,
+    dest: dict[str, float] | list | None = None,
+    clearance_nm: float | None = None,
+) -> list[dict[str, float]]:
+    """Force a sea-only polyline. Endpoints stay pinned. Land crossing is repaired, not skipped."""
+    path = _as_pts(waypoints)
+    if len(path) < 2:
+        return path
+
+    def _ll(p: dict[str, float] | list) -> dict[str, float]:
+        if isinstance(p, dict):
+            return {"lat": float(p["lat"]), "lon": float(p["lon"])}
+        return {"lat": float(p[0]), "lon": float(p[1])}
+
+    start = _ll(origin) if origin is not None else path[0]
+    end = _ll(dest) if dest is not None else path[-1]
+    clr = float(clearance_nm if clearance_nm is not None else settings.land_clearance_nm)
+    path[0], path[-1] = start, end
+    path = _repair_land_legs(path, clr)
+    if not score_route_land(path, sample_nm=8.0, clearance_nm=0.0)["sea_clear"]:
+        path = _sea_safe_fallback(path, clr)
+        path = _repair_land_legs(path, clr)
+    path[0], path[-1] = start, end
+    return [{"lat": p["lat"], "lon": p["lon"], "seq": i} for i, p in enumerate(path)]
 
 
 def optimize_conventional(
@@ -498,6 +680,8 @@ def optimize_conventional(
     storms: list | None = None,
     *,
     algo: str | None = None,
+    speed_kn: float | None = None,
+    fuel_mt_day: float | None = None,
 ) -> dict[str, Any]:
     """Return VO-shaped optimize result using Dijkstra or A* with land hard rules."""
     master = _as_pts(waypoints)
@@ -508,12 +692,41 @@ def optimize_conventional(
     wx_f = _weather_factor(weather)
     algo_s = (algo or settings.route_opt_algo or "astar").strip().lower()
     use_astar = algo_s != "dijkstra"
+    sog = float(speed_kn) if speed_kn else _DEFAULT_SPEED_KN
+    t0 = time.monotonic()
+    progress(
+        "RouteOptimize",
+        f"conventional {objective} algo={algo_s} wps={len(master)} speed={sog}kn",
+        phase="search",
+    )
 
     nodes, start_i, goal_i = _build_nodes(master, clearance)
     adj = _neighbors(nodes, clearance)
     _ensure_terminal_links(nodes, adj, start_i, goal_i, clearance)
+    obj = (objective or "shortest").lower()
+    # Land is the only hard wall. Safest may try storm keep-out first.
+    prefer_storm_out = obj == "safest" and bool(storms_n)
 
-    path = _search(nodes, adj, start_i, goal_i, objective, storms_n, wx_f, use_astar=use_astar)
+    def _kw(hard_storm: bool) -> dict:
+        return {
+            "use_astar": use_astar,
+            "hard_storm": hard_storm,
+            "speed_kn": sog,
+            "fuel_mt_day": fuel_mt_day,
+        }
+
+    def _run_search() -> list[dict[str, float]] | None:
+        if prefer_storm_out:
+            found = _search(
+                nodes, adj, start_i, goal_i, objective, storms_n, wx_f, **_kw(True),
+            )
+            if found is not None:
+                return found
+        return _search(
+            nodes, adj, start_i, goal_i, objective, storms_n, wx_f, **_kw(False),
+        )
+
+    path = _run_search()
 
     if path is None:
         # Soften clearance and widen coast coverage
@@ -531,7 +744,7 @@ def optimize_conventional(
                 nodes.append(p)
         adj = _neighbors(nodes, soft, max_link_nm=_MAX_LINK_NM * 1.2, k=16)
         _ensure_terminal_links(nodes, adj, start_i, goal_i, soft)
-        path = _search(nodes, adj, start_i, goal_i, objective, storms_n, wx_f, use_astar=use_astar)
+        path = _run_search()
         clearance_check = soft
     else:
         clearance_check = clearance
@@ -541,31 +754,59 @@ def optimize_conventional(
         clearance_check = 0.0
 
     path = _simplify(path, clearance_check)
+    path = _repair_land_legs(path, clearance)
+    if len(path) < 6:
+        dense = _densify_master(path, step_nm=90.0)
+        keep = [dense[0]]
+        for p in dense[1:-1]:
+            if is_navigable(p["lat"], p["lon"], 0.0):
+                keep.append(p)
+        keep.append(dense[-1])
+        if score_route_land(keep, sample_nm=8.0, clearance_nm=0.0)["sea_clear"]:
+            path = keep
+    path = _repair_land_legs(path, clearance)
     path[0] = {"lat": master[0]["lat"], "lon": master[0]["lon"]}
     path[-1] = {"lat": master[-1]["lat"], "lon": master[-1]["lon"]}
 
-    # Final hard gate: replace land-crossing result with coast fallback
-    if not score_route_land(path, sample_nm=15.0, clearance_nm=0.0)["sea_clear"]:
-        repair = _search(nodes, adj, start_i, goal_i, "safest", storms_n, wx_f, use_astar=True)
-        if repair and score_route_land(repair, sample_nm=15.0, clearance_nm=0.0)["sea_clear"]:
+    # Never keep a 2-point land chord (origin–dest shortcut)
+    if not score_route_land(path, sample_nm=12.0, clearance_nm=0.0)["sea_clear"]:
+        repair = _search(
+            nodes, adj, start_i, goal_i, objective, storms_n, wx_f, **_kw(prefer_storm_out),
+        ) or _search(
+            nodes, adj, start_i, goal_i, objective, storms_n, wx_f, **_kw(False),
+        )
+        if repair and score_route_land(repair, sample_nm=12.0, clearance_nm=0.0)["sea_clear"]:
             path = _simplify(repair, 0.0)
         else:
             path = _sea_safe_fallback(master, clearance)
         path[0] = {"lat": master[0]["lat"], "lon": master[0]["lon"]}
         path[-1] = {"lat": master[-1]["lat"], "lon": master[-1]["lon"]}
 
+    path = _repair_land_legs(path, clearance)
+    path[0] = {"lat": master[0]["lat"], "lon": master[0]["lon"]}
+    path[-1] = {"lat": master[-1]["lat"], "lon": master[-1]["lon"]}
+
     wps = [{"lat": p["lat"], "lon": p["lon"], "seq": i} for i, p in enumerate(path)]
-    m = _metrics(path, objective)
-    sea = score_route_land(wps, sample_nm=15.0, clearance_nm=0.0)["sea_clear"]
+    m = _metrics(path, sog, fuel_mt_day)
+    sea = score_route_land(wps, sample_nm=8.0, clearance_nm=0.0)["sea_clear"]
+    progress(
+        "RouteOptimize",
+        f"conventional {objective} done dist={m['distanceNm']}NM wps={len(wps)} sea_clear={sea}",
+        phase="search",
+        elapsed_s=time.monotonic() - t0,
+    )
     return {
         "objective": objective,
         "waypoints": wps,
         "distanceNm": m["distanceNm"],
         "fuelMt": m["fuelMt"],
         "etaHours": m["etaHours"],
+        "days": m["days"],
         "weatherAware": bool(weather),
         "stormAware": bool(storms_n),
         "provider": f"local-{algo_s}-{objective}",
         "land_clearance_nm": clearance,
         "sea_clear": sea,
+        "speedKn": sog,
+        "fuelMtDay": fuel_mt_day,
     }

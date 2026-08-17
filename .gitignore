@@ -6,6 +6,7 @@ data/*.json
 .pytest_cache/
 *.egg-info/
 inbox/
+noon_inbox/
 !samples/inbox/
 storm_alerts/
 reports/

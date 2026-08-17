@@ -81,12 +81,13 @@ class Settings:
     route_opt_method: str = os.getenv("VPM_ROUTE_OPT_METHOD", "conventional")
     # conventional only: astar | dijkstra
     route_opt_algo: str = os.getenv("VPM_ROUTE_OPT_ALGO", "astar")
-    # Hard rule: route points/legs must stay this many NM clear of landmasses
+    # Preferred standoff when placing graph nodes; land *crossing* is the hard reject
     land_clearance_nm: float = float(os.getenv("VPM_LAND_CLEARANCE_NM", "25"))
     data_dir: Path = ROOT / "data"
 
     # Continuous ops folders — set absolute paths in .env
     inbox_dir: Path = _path("VPM_INBOX_DIR", ROOT / "inbox")
+    noon_inbox_dir: Path = _path("VPM_NOON_INBOX_DIR", ROOT / "noon_inbox")
     storm_out_dir: Path = _path("VPM_STORM_OUT_DIR", ROOT / "storm_alerts")
     reports_out_dir: Path = _path("VPM_REPORTS_OUT_DIR", ROOT / "reports")
     templates_dir: Path = _path("VPM_TEMPLATES_DIR", ROOT / "templates")
@@ -131,6 +132,26 @@ class Settings:
     weather_report_on_prevoyage: bool = os.getenv(
         "VPM_WEATHER_REPORT_ON_PREVOYAGE", "true"
     ).lower() in ("1", "true", "yes")
+
+    # Auto-email generated report PDFs. env = VPM_REPORT_EMAIL; db = placeholder (wire later)
+    report_email: str = os.getenv("VPM_REPORT_EMAIL", "")
+    report_email_source: str = os.getenv("VPM_REPORT_EMAIL_SOURCE", "env")  # env | db
+    smtp_host: str = os.getenv("VPM_SMTP_HOST", "")
+    smtp_port: int = int(os.getenv("VPM_SMTP_PORT") or "587")
+    smtp_user: str = os.getenv("VPM_SMTP_USER", "")
+    smtp_password: str = os.getenv("VPM_SMTP_PASSWORD", "")
+    smtp_from: str = os.getenv("VPM_SMTP_FROM", "")
+
+    # End-of-voyage map: by default stitch the same OSM.de tiles the VoyagePM GUI uses.
+    # Optional override: POST {voyage_number, points:[{lat,lon}]} → image/png (or JSON image_base64/url).
+    voyage_map_url: str = os.getenv("VPM_VOYAGE_MAP_URL", "")
+    # Kick EOV report when an Arrival noon row is processed (runs in background thread)
+    eov_on_arrival: bool = os.getenv("VPM_EOV_ON_ARRIVAL", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
     @property
     def effective_llm_provider(self) -> str:
         """Resolved provider — auto-routes Gemini-shaped keys off OpenAI."""

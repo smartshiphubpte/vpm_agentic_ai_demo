@@ -37,11 +37,26 @@ def format_waypoints(points: list[dict], limit: int = 40) -> str:
     return "\n".join(lines) if lines else "  (none)"
 
 
-def write_report(out_dir: Path, filename: str, body: str) -> Path:
+def write_report(
+    out_dir: Path,
+    filename: str,
+    body: str,
+    *,
+    email_pdf: bool = False,
+    voyage_number: str = "",
+) -> Path:
+    """Write .txt report. If email_pdf, also write a PDF sibling (auto-emailed)."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / filename
     path.write_text(body, encoding="utf-8")
+    if email_pdf:
+        write_text_pdf(
+            out_dir,
+            Path(filename).with_suffix(".pdf").name,
+            body,
+            voyage_number=voyage_number,
+        )
     return path
 
 
@@ -71,7 +86,9 @@ def _mono_font_path() -> Path | None:
     return None
 
 
-def write_text_pdf(out_dir: Path, filename: str, body: str) -> Path:
+def write_text_pdf(
+    out_dir: Path, filename: str, body: str, *, voyage_number: str = ""
+) -> Path:
     """Render preformatted report text to landscape A4 PDF (monospace, multi-page)."""
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
@@ -100,4 +117,7 @@ def write_text_pdf(out_dir: Path, filename: str, body: str) -> Path:
         pdf.cell(0, line_height, line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.output(str(path))
+    from vpm_agents.tools.report_email import send_report_pdf
+
+    send_report_pdf(path, voyage_number=voyage_number or out_dir.name)
     return path

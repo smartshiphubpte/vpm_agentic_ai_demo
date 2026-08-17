@@ -465,7 +465,9 @@ def write_weather_report(
         "swell_limit_m": lim["max_swell_m"],
     }
     body = _fill_passage_template("passage_weather_report.txt", ctx)
-    pdf_path = write_text_pdf(out_dir, f"weather_report_{stamp}.pdf", body)
+    pdf_path = write_text_pdf(
+        out_dir, f"weather_report_{stamp}.pdf", body, voyage_number=voyage_number
+    )
     return pdf_path, json_path
 
 

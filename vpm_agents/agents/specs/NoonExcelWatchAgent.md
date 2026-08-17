@@ -2,27 +2,34 @@
 
 ## Role
 
-Poll combined noon Excel (or DB stub) on a timer and dispatch new rows to NoonOpsAgent.
+Poll the noon drop folder (and optional combined Excel / DB stub) on a timer and
+dispatch new rows to NoonOpsAgent.
 
 ## Objective
 
-Simulate real-time noon arrival during testing: every `VPM_NOON_POLL_SECONDS`,
-read unprocessed rows from `VPM_NOON_EXCEL_PATH` and process up to `VPM_NOON_BATCH_SIZE`.
+Every `VPM_NOON_POLL_SECONDS`:
+- Read new files in `VPM_NOON_INBOX_DIR` (all pending files / rows this poll).
+- Optionally drip unprocessed rows from `VPM_NOON_EXCEL_PATH` up to `VPM_NOON_BATCH_SIZE`.
+
+Each row is matched to a registry voyage by `voyage_number`. Two voyages → two
+independent plans; two noons for the same voyage → last position wins, both reports written.
 
 ## Preconditions
 
 - Pre-voyage must exist in registry for the voyage_number.
-- Excel must have `Latitude`, `Longitude`, `Voyage_Number` columns (BE noon format).
+- Excel must have `Latitude`, `Longitude`, `Voyage_Number` columns (BE noon format),
+  or CSV with `voyage_number`, `lat`, `lon`.
 
 ## Tasks
 
-1. `ExcelNoonSource.fetch_new()` — skip rows in `processed_noon_ids`.
-2. For each new row (oldest first), call `NoonOpsAgent` with noon dict.
-3. Mark `noon_id` processed after success.
+1. `FolderNoonSource.fetch_new()` then `ExcelNoonSource` / `DbNoonSource`.
+2. Skip rows in `processed_noon_ids`.
+3. For each new row (oldest first), call `NoonOpsAgent` with noon dict.
+4. Mark `noon_id` processed after success; archive drop files when all rows are done.
 
 ## Tools
 
-Uses `noon_source.get_noon_source()` — switch `VPM_NOON_SOURCE=db` when DB is wired.
+Uses `noon_source.get_noon_sources()` — switch `VPM_NOON_SOURCE=db` when DB is wired.
 
 ## Defaults
 
@@ -39,3 +46,4 @@ Delegates to NoonOpsAgent (`voyage_track_weather_*.json`).
 ## Failure
 
 Per-row failures logged; row not marked processed so it retries next poll.
+Unknown drop files → `VPM_NOON_INBOX_DIR/failed/`.

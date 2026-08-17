@@ -10,7 +10,9 @@ which **background agents** stay active.
 Let the operator select a flow tag (`VPM_DAEMON_FLOW` or `--flow`). The daemon **never stops**;
 `stop` in a chain only means “do not run the next one-shot agent on ingest” (e.g. skip
 `route_optimize`). Agents included in the flow keep polling on their timers (weather due jobs,
-noon Excel, storm watch).
+noon Excel, storm watch). When an **Arrival** noon row is processed, End-of-Voyage report
+generation is queued on a **background thread** (`VPM_EOV_ON_ARRIVAL`) so inbox/noon polling
+continues for other voyages.
 
 ## Flow tags
 

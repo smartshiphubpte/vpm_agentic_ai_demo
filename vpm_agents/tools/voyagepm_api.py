@@ -14,7 +14,7 @@ class LiveBackend:
 
     def __init__(self, base_url: str | None = None):
         self.base_url = (base_url or settings.base_url).rstrip("/")
-        self.client = httpx.Client(base_url=self.base_url, timeout=60.0, follow_redirects=True)
+        self.client = httpx.Client(base_url=self.base_url, timeout=300.0, follow_redirects=True)
         self.token: str | None = None
 
     def login(self, email: str, password: str) -> dict:
@@ -97,6 +97,9 @@ class LiveBackend:
         waypoints: list,
         weather: dict | None = None,
         storms: list | None = None,
+        *,
+        speed_kn: float | None = None,
+        fuel_mt_day: float | None = None,
     ) -> dict:
         # Live default: local conventional/LLM — no voyagepm_be required.
         # Set VPM_ROUTE_OPT_METHOD=backend to use BE VO endpoints instead.
@@ -104,7 +107,10 @@ class LiveBackend:
         if method != "backend":
             from vpm_agents.tools.route_opt_dispatch import optimize_local
 
-            return optimize_local(objective, waypoints, weather, storms)
+            return optimize_local(
+                objective, waypoints, weather, storms,
+                speed_kn=speed_kn, fuel_mt_day=fuel_mt_day,
+            )
 
         path_map = {
             "shortest": "/voyage-optimization/optimize/shortest-route",
@@ -204,6 +210,35 @@ class LiveBackend:
         r = self.client.post("/eov/compute", json={"voyageId": voyage_id})
         r.raise_for_status()
         return r.json()
+
+    def compute_eov_report(
+        self,
+        token: str,
+        *,
+        vessel_id: str,
+        voyage_number: str,
+        cp_speed: float = 0,
+        cp_cons: float = 0,
+        bf: float | None = 4,
+        wv: float | None = 5,
+    ) -> dict:
+        """Full EOV formula pack — GET /eovReport/compute (matches FE Export PDF)."""
+        params: dict = {"vesselId": vessel_id, "voyageNumber": voyage_number}
+        if cp_speed:
+            params["cpSpeed"] = cp_speed
+        if cp_cons:
+            params["cpCons"] = cp_cons
+        if bf is not None:
+            params["bf"] = bf
+        if wv is not None:
+            params["wv"] = wv
+        r = self.client.get("/eovReport/compute", params=params)
+        r.raise_for_status()
+        body = r.json()
+        # responseHandler wraps as {data: ...} or returns payload directly
+        if isinstance(body, dict) and "data" in body and isinstance(body["data"], dict):
+            return body["data"]
+        return body if isinstance(body, dict) else {"raw": body}
 
     def voyage_performance(self, token: str, voyage_id: str) -> dict:
         r = self.client.get("/voyage-performance", params={"voyageId": voyage_id})

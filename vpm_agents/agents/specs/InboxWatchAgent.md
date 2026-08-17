@@ -2,11 +2,12 @@
 
 ## Role
 
-Watch `VPM_INBOX_DIR` for new pre-voyage / noon Excel (or CSV) drops and dispatch them.
+Watch `VPM_INBOX_DIR` for new pre-voyage Excel (or CSV) drops and dispatch them.
 
 ## Objective
 
-Each poll cycle, classify new files and hand them to PreVoyageIngestAgent or NoonOpsAgent.
+Each poll cycle, classify new files and hand pre-voyage workbooks to PreVoyageIngestAgent.
+Noon files belong in `VPM_NOON_INBOX_DIR` (NoonExcelWatchAgent), not this inbox.
 
 ## Preconditions
 
@@ -15,9 +16,10 @@ Each poll cycle, classify new files and hand them to PreVoyageIngestAgent or Noo
 ## Tasks
 
 1. List new `.csv` / `.xlsx` / `.xlsm` files in inbox (not in processed/failed).
-2. Classify by header columns.
-3. Dispatch to the matching specialist agent.
-4. Unknown types → `failed/`.
+2. Classify by header columns (pre-voyage vs unknown).
+3. Dispatch pre-voyage files to PreVoyageIngestAgent (multiple files = multiple voyages).
+4. Noon files dropped here → `failed/` (use `VPM_NOON_INBOX_DIR`).
+5. Unknown types → `failed/`.
 
 ## Tools
 

@@ -230,7 +230,13 @@ def write_storm_voyage_report(
         body = fill_template("tropical_cyclone_alert_report.txt", ctx)
     except FileNotFoundError:
         body = fill_template("storm_alert.txt", ctx)
-    txt_path = write_report(out_dir, f"cyclone_alert_{stamp}.txt", body)
+    txt_path = write_report(
+        out_dir,
+        f"cyclone_alert_{stamp}.txt",
+        body,
+        email_pdf=True,
+        voyage_number=voyage_number,
+    )
     return txt_path, json_path
 
 

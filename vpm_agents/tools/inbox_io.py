@@ -5,7 +5,7 @@ Supports:
   2) Real SSH Pre-Dep Voyage workbook (sheets: Vessel Details, Voyage Details,
      Waypoints List, CP Terms FWC)
 
-Drop files into VPM_INBOX_DIR. Processed files move to inbox/processed/.
+Drop pre-voyage files into VPM_INBOX_DIR. Noon files go in VPM_NOON_INBOX_DIR.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ import re
 import shutil
 from pathlib import Path
 from typing import Any, Literal
+
+from vpm_agents.tools.voyage_registry import normalize_voyage_number
 
 MsgKind = Literal["pre_voyage", "noon_report", "unknown"]
 
@@ -282,7 +284,7 @@ def parse_predep_workbook(path: Path) -> dict[str, Any]:
         vessel_id = str(imo).strip() if imo is not None else (str(vessel_name).strip() if vessel_name else "")
         cond = _pick(fields, "condition (ballast/laden)", "condition")
         return {
-            "voyage_number": str(voyage_number).strip(),
+            "voyage_number": normalize_voyage_number(str(voyage_number)),
             "vessel_id": vessel_id,
             "vessel_name": "" if vessel_name is None else str(vessel_name).strip(),
             "source_port": str(source_port).strip(),
@@ -400,12 +402,20 @@ def parse_pre_voyage(path: str | Path) -> dict[str, Any]:
         if key not in row or not row[key]:
             raise ValueError(f"pre-voyage missing {key}")
     emails = [e for e in row.get("alert_emails", "").split("|") if e.strip()]
+    cons_raw = row.get("cp_consumption_mt_day") or row.get("cp_consumption")
+    cons = None
+    if cons_raw not in (None, ""):
+        try:
+            cons = float(cons_raw)
+        except ValueError:
+            cons = None
     return {
-        "voyage_number": row["voyage_number"],
+        "voyage_number": normalize_voyage_number(row["voyage_number"]),
         "vessel_id": row["vessel_id"],
         "source_port": row["source_port"],
         "dest_port": row["dest_port"],
         "cp_speed_kn": float(row["cp_speed_kn"]),
+        "cp_consumption_mt_day": cons,
         "alert_emails": emails,
         "master_waypoints": _parse_waypoint_field(row["waypoints"]),
         "source_file": str(path),
@@ -421,7 +431,7 @@ def parse_noon_report(path: str | Path) -> dict[str, Any]:
         if key not in row or not row[key]:
             raise ValueError(f"noon report missing {key}")
     return {
-        "voyage_number": row["voyage_number"],
+        "voyage_number": normalize_voyage_number(row["voyage_number"]),
         "lat": float(row["lat"]),
         "lon": float(row["lon"]),
         "observed_at": row.get("observed_at") or None,

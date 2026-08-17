@@ -35,6 +35,9 @@ def _ensure_dirs() -> None:
         settings.inbox_dir,
         settings.inbox_dir / "processed",
         settings.inbox_dir / "failed",
+        settings.noon_inbox_dir,
+        settings.noon_inbox_dir / "processed",
+        settings.noon_inbox_dir / "failed",
         settings.storm_out_dir,
         settings.reports_out_dir,
         settings.templates_dir,
@@ -89,12 +92,25 @@ def run_forever(flow_name: str | None = None) -> None:
     print(f"  flow        = {flow_name} — {flow.get('description', '')}", flush=True)
     print(f"  prevoyage   = {chain_steps(flow_name)} (boundary only — daemon keeps running)", flush=True)
     print(f"  inbox       = {settings.inbox_dir}", flush=True)
+    print(f"  noon inbox  = {settings.noon_inbox_dir}", flush=True)
     print(f"  weather poll= {weather_poll} (delay {settings.weather_report_delay_minutes}m)", flush=True)
     print(f"  noon poll   = {flow.get('noon_poll', False)} (every {noon_poll}s)", flush=True)
     print(f"  storm poll  = {flow.get('storm_poll', False)} (every {settings.storm_interval_hours}h)", flush=True)
     print(f"  reports out = {settings.reports_out_dir}", flush=True)
     print(f"  weather out = {settings.weather_out_dir}  (→ {{voyage}}/weather_report_*.pdf)", flush=True)
+    print(
+        f"  eov on arrive= {settings.eov_on_arrival}  (background; map={settings.voyage_map_url or 'OSM.de tiles=GUI'})",
+        flush=True,
+    )
+    dest = (settings.report_email or "").strip() or "(unset — PDFs not emailed)"
+    print(
+        f"  report email= {dest}  source={settings.report_email_source}"
+        + ("" if settings.smtp_host else "  (set VPM_SMTP_HOST to send)"),
+        flush=True,
+    )
+    print("  notes print live when an agent starts/finishes (idle inbox polls are quiet)", flush=True)
 
+    last_hb = 0.0
     while True:
         now = time.monotonic()
         state = SessionState()
@@ -125,8 +141,10 @@ def run_forever(flow_name: str | None = None) -> None:
                 print(f"[{datetime.now(timezone.utc).isoformat()}] storm error: {e}", flush=True)
             next_storm = now + storm_interval
 
-        for line in state.log:
-            print(line, flush=True)
+        if now - last_hb >= 30.0:
+            ts = datetime.now(timezone.utc).strftime("%H:%M:%SZ")
+            print(f"[{ts}] [Daemon] alive flow={flow_name} idle-poll={inbox_poll}s", flush=True)
+            last_hb = now
 
         time.sleep(inbox_poll)
 

@@ -9,6 +9,7 @@ from vpm_agents.agents.specialists import (
     WeatherAgent,
 )
 from vpm_agents.agents.continuous import (
+    EndOfVoyageReportAgent,
     InboxWatchAgent,
     NoonExcelWatchAgent,
     NoonOpsAgent,
@@ -34,4 +35,5 @@ __all__ = [
     "StormWatchAgent",
     "WeatherReportAgent",
     "InboxWatchAgent",
+    "EndOfVoyageReportAgent",
 ]

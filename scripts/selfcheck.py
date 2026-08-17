@@ -36,12 +36,17 @@ def _continuous_cycle() -> None:
     spec.loader.exec_module(mod)
 
     inbox = settings.inbox_dir
+    noon_inbox = settings.noon_inbox_dir
     inbox.mkdir(parents=True, exist_ok=True)
-    for name in ("pre_voyage.csv", "noon_report.csv"):
-        dest = inbox / name
-        if dest.exists():
-            dest.unlink()
-        shutil.copy(ROOT / "samples" / "inbox" / name, dest)
+    noon_inbox.mkdir(parents=True, exist_ok=True)
+    dest = inbox / "pre_voyage.csv"
+    if dest.exists():
+        dest.unlink()
+    shutil.copy(ROOT / "samples" / "inbox" / "pre_voyage.csv", dest)
+    noon_dest = noon_inbox / "noon_report.csv"
+    if noon_dest.exists():
+        noon_dest.unlink()
+    shutil.copy(ROOT / "samples" / "inbox" / "noon_report.csv", noon_dest)
 
     state = mod.run_once(storm=True, inbox=True)
     assert_true(
@@ -122,6 +127,14 @@ def _continuous_cycle() -> None:
     from vpm_agents.tools.mock_backend import MockBackend
 
     assert_true(not is_land(1.25, 103.85), "Singapore approaches must be water")
+    assert_true(not is_land(22.3, 114.2), "Hong Kong approaches must be water")
+    assert_true(not is_land(36.07, 120.38), "Qingdao approaches must be water")
+    assert_true(not is_land(24.5, 119.5), "Taiwan Strait must be water")
+    assert_true(is_land(29.2, 120.8), "Zhejiang interior must be land")
+    assert_true(
+        score_route_land([[12.2, 109.2], [36.07, 120.38]], sample_nm=12)["sea_clear"] is False,
+        "Vietnam→Qingdao chord must fail land hard rule",
+    )
     assert_true(is_land(40.0, -100.0), "continental interior must be land")
     assert_true(
         score_route_land([[40.0, -100.0], [0.0, -150.0]], sample_nm=30)["sea_clear"] is False,
@@ -225,6 +238,12 @@ def _continuous_cycle() -> None:
     )
     dij = optimize_conventional("shortest", sea_master, None, None, algo="dijkstra")
     assert_true(dij["provider"].startswith("local-dijkstra"), "dijkstra provider")
+    # BE: storms are hard keep-out when a sea detour exists (South China Sea corridor)
+    conv_clear = score_route_storms(conv["waypoints"], storm_hit)
+    assert_true(
+        conv_clear["storm_clear"] or conv.get("sea_clear"),
+        "safest should prefer storm keep-out when graph allows",
+    )
     assert_true(load_agent_spec("RouteOptimizeLLMAgent").path.is_file(), "missing LLM route-opt spec")
     assert_true(load_agent_spec("PreVoyageRouteOptimizeAgent").path.is_file(), "missing pre-voyage opt spec")
 
@@ -242,8 +261,36 @@ def _continuous_cycle() -> None:
     assert_true(kind == "pre_voyage", f"bad classify {kind}")
     pv = parse_pre_voyage(ROOT / "samples" / "inbox" / "pre_voyage.csv")
     assert_true(pv["cp_speed_kn"] == 12.5, "bad speed")
+    assert_true(pv.get("cp_consumption_mt_day") is None, "sample CSV has no consumption")
+
+    from vpm_agents.tools.route_optimize import voyage_metrics, format_alternatives_block
+
+    m0 = voyage_metrics(240.0, 12.0, None)
+    assert_true(m0["fuelMt"] is None and m0["days"] == 0.83, f"metrics skip fuel {m0}")
+    m1 = voyage_metrics(240.0, 12.0, 24.0)
+    assert_true(m1["fuelMt"] == 20.0, f"fuel from MT/day {m1}")
+    blk = format_alternatives_block(
+        {
+            "shortest": {
+                "id": "shortest",
+                "label": "Shortest",
+                "voyage": m0,
+                "sea_clear": True,
+                "avoids_storms": True,
+                "weather_along": "wind 10 kn",
+            }
+        }
+    )
+    assert_true("fuel consumption" not in blk, "must omit fuel when unknown")
+    assert_true("distance: 240" in blk, "distance missing in report block")
     nr = parse_noon_report(ROOT / "samples" / "inbox" / "noon_report.csv")
     assert_true(nr["voyage_number"] == "VYG-2026-001", "bad noon voyage")
+
+    from vpm_agents.tools.report_email import _parse_emails, recipients_from_db, send_report_pdf
+
+    assert_true(_parse_emails("a@x.com, b@y.com") == ["a@x.com", "b@y.com"], "report email parse")
+    assert_true(recipients_from_db("VTEST") == [], "db recipients placeholder")
+    assert_true(send_report_pdf(ROOT / "nope.pdf") is False, "missing pdf should skip")
 
 
 def main() -> None:
@@ -262,6 +309,7 @@ def main() -> None:
         "StormWatchAgent",
         "WeatherReportAgent",
         "InboxWatchAgent",
+        "EndOfVoyageReportAgent",
     ):
         assert_true(load_agent_spec(cont).path.is_file(), f"missing continuous spec {cont}")
     sup = load_agent_spec("SupervisorOrchestrator")

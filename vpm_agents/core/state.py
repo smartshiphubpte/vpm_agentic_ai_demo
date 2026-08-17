@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -40,8 +41,19 @@ class SessionState:
     log: list[str] = field(default_factory=list)
     phase: str = "new"
 
-    def note(self, agent: str, msg: str) -> None:
-        self.log.append(f"[{agent}] {msg}")
+    def note(
+        self, agent: str, msg: str, *, quiet: bool = False, elapsed_s: float | None = None
+    ) -> None:
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%SZ")
+        timing = ""
+        if elapsed_s is not None:
+            from vpm_agents.tools.agent_log import fmt_elapsed
+
+            timing = f" elapsed={fmt_elapsed(elapsed_s)}"
+        line = f"[{ts}] [{agent}] phase={self.phase} {msg}{timing}"
+        self.log.append(line)
+        if not quiet:
+            print(line, flush=True)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

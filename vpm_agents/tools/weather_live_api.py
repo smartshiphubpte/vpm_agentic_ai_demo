@@ -33,7 +33,8 @@ def fetch_weather_along_route(waypoints: list) -> dict[str, Any]:
     interval_h = float(settings.waypoint_interval_hours)
     limits = weather_limits_from()
 
-    with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+    # No agent kill-on-slow — only socket wait. Time is not a calc constraint.
+    with httpx.Client(timeout=300.0, follow_redirects=True) as client:
         for start in range(0, len(waypoints), _CHUNK):
             chunk = waypoints[start : start + _CHUNK]
             lats = ",".join(str(float(p["lat"])) for p in chunk)
