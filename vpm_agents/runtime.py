@@ -166,6 +166,12 @@ def run_prevoyage_db() -> None:
     run_forever()
 
 
+def run_port_weather() -> None:
+    from port_weather.service import run_forever
+
+    run_forever()
+
+
 SERVICES: dict[str, Callable[[], None]] = {
     "ingest": run_ingest,
     "noon": run_noon,
@@ -174,4 +180,5 @@ SERVICES: dict[str, Callable[[], None]] = {
     "storm": run_storm,
     "report_sender": run_report_sender,
     "prevoyage_db": run_prevoyage_db,
+    "port_weather": run_port_weather,
 }

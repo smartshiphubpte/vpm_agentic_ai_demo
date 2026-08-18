@@ -169,6 +169,7 @@ if __name__ == "__main__":
     assert geo[0]["geometry"]["coordinates"] == [103.0, 1.0]
     voy = build_voyage_row(rec, vessel_id="99", route_geojson=geo)
     assert voy["voyageNumber"] == "VTEST" and voy["cpSpeed"] == 12.0
+    assert voy["etd"].isoformat() == "2026-08-17T00:00:00+00:00"
     etd = _parse_ts("30-JUL-2026 1730LT (UTC+7)")
     assert etd is not None and etd.hour == 10 and etd.minute == 30 and etd.day == 30
     print("prevoyage_db.mapper self-check ok")

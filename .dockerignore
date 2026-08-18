@@ -17,6 +17,7 @@ storm_alerts/
 reports/
 weather_reports/
 report_outbox/
+port_weather_out/
 
 # Noise
 *.md

@@ -215,6 +215,24 @@ def is_arrival_report(report_type: str | None) -> bool:
     return "arrival" in t
 
 
+def is_departure_report(report_type: str | None) -> bool:
+    t = (report_type or "").strip().lower()
+    return "departure" in t and "pre" not in t
+
+
+def voyage_has_departed(voyage_rec: dict[str, Any] | None) -> bool:
+    """True once a real Departure Report has been ingested (not pre-voyage)."""
+    rec = voyage_rec or {}
+    if rec.get("passage_weather_active"):
+        return True
+    if is_departure_report((rec.get("last_noon") or {}).get("report_type")):
+        return True
+    for row in rec.get("noon_history") or []:
+        if is_departure_report(row.get("report_type")):
+            return True
+    return False
+
+
 if __name__ == "__main__":
     rows = [
         {"noon_id": "b", "observed_at": "2026-01-02T00:00:00Z"},
@@ -222,4 +240,9 @@ if __name__ == "__main__":
         {"noon_id": "c", "observed_at": None},
     ]
     assert [r["noon_id"] for r in sort_noon_rows(rows)] == ["a", "b", "c"]
+    assert is_departure_report("Departure Report")
+    assert not is_departure_report("Noon Report")
+    assert not is_departure_report("pre-voyage departure")
+    assert voyage_has_departed({"noon_history": [{"report_type": "Departure Report"}]})
+    assert not voyage_has_departed({"last_noon": {"report_type": "Noon Report"}})
     print("noon_io self-check ok")

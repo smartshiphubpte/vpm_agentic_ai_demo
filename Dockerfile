@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY vpm_agents ./vpm_agents
 COPY report_sender ./report_sender
 COPY prevoyage_db ./prevoyage_db
+COPY port_weather ./port_weather
 COPY scripts ./scripts
 COPY templates ./templates
 

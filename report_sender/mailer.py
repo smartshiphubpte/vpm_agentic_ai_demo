@@ -13,20 +13,37 @@ def _parse_emails(raw: str) -> list[str]:
     return [e.strip() for e in (raw or "").replace(";", ",").split(",") if e.strip() and "@" in e]
 
 
+def resolve_report_recipients(
+    *,
+    voyage_number: str = "",
+    report_bucket: str = "",
+    audience: str = "",
+) -> list[str]:
+    """Current behavior stays env-based; signature leaves room for DB routing later."""
+    _ = (voyage_number, report_bucket, audience)
+    return _parse_emails(settings.review_email)
+
+
 def send_report_pdf(
     path: str | Path,
     *,
     to: list[str] | None = None,
     voyage_number: str = "",
+    report_bucket: str = "",
+    audience: str = "",
     subject_suffix: str = "",
 ) -> bool:
     """Attach PDF and send. Never raises; False = skipped/failed."""
     path = Path(path)
     if path.suffix.lower() != ".pdf" or not path.is_file():
         return False
-    recipients = to or _parse_emails(settings.review_email)
+    recipients = to or resolve_report_recipients(
+        voyage_number=voyage_number,
+        report_bucket=report_bucket,
+        audience=audience,
+    )
     if not recipients:
-        log("skip", f"{path.name}: no recipients (VPM_REPORT_SENDER_REVIEW_EMAIL unset)")
+        log("skip", f"{path.name}: no recipients (env/db routing unresolved)")
         return False
     host = (settings.smtp_host or "").strip()
     if not host:
@@ -40,7 +57,11 @@ def send_report_pdf(
     msg["From"] = from_addr
     msg["To"] = ", ".join(recipients)
     msg.set_content(
-        f"A VoyagePM report is ready for review.\n\nVoyage: {voy or '—'}\nFile: {path.name}\n"
+        "A VoyagePM report is ready for review.\n\n"
+        f"Voyage: {voy or '—'}\n"
+        f"Report folder: {report_bucket or '—'}\n"
+        f"Audience: {audience or 'default'}\n"
+        f"File: {path.name}\n"
     )
     msg.add_attachment(
         path.read_bytes(),

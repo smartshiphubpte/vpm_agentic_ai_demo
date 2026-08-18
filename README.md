@@ -52,6 +52,7 @@ Shared state across containers is the voyage registry JSON, drop folders, and `V
 | `weather` | WeatherReport | registry `weather_due_at` |
 | `routeopt` | PreVoyageRouteOptimize | job files from ingest/noon |
 | `storm` | StormWatch | timer (writes snapshots others read) |
+| `port-weather` | PortWeather | registry arrival/departure + 24h timer |
 | `report-sender` | report_sender | PDF folders + optional DBs |
 
 Do not run `run_daemon.py` and Compose at the same time — they would double-pick inbox files.
@@ -188,9 +189,21 @@ Copy `_TEMPLATE.md` to add a new agent. Supervisor workflows + goal keywords liv
 
 When thresholds are exceeded (`weather_limits` in `WeatherReportAgent.md` Defaults), events list **date/time**, **position**, and **reason**.
 
-Output folder: `VPM_WEATHER_OUT_DIR/{voyage_number}/`
-- `weather_report_*.txt` — human-readable
-- `bad_weather_*.json` — machine-readable events
+Voyage reports now share one tree per vessel/voyage:
+`VPM_REPORTS_OUT_DIR/{vessel_imo}/{voyage_number}/`
+
+- `pre_voyage_report/`
+- `weather_report/`
+- `port_weather/`
+- `end_of_voyage_report/`
+- `vpa/`
+
+Port-weather folder loop (separate microservice):
+
+- Trigger: latest **Arrival Report** for a vessel starts in-port weather refresh
+- Cadence: every `VPM_PORT_WEATHER_INTERVAL_HOURS` (default 24h)
+- Stop: a newer **Departure Report** for the same vessel halts refresh
+- Output: `VPM_REPORTS_OUT_DIR/{imo}/{voyage}/port_weather/incoming/port_weather_*.pdf` (picked by report-sender)
 
 `scripts/run_daemon.py` always-on loop:
 

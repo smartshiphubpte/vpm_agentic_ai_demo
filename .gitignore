@@ -11,4 +11,5 @@ noon_inbox/
 !samples/inbox/
 storm_alerts/
 reports/
+port_weather_out/
 .~lock.*

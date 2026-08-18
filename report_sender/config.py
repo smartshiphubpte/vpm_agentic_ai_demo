@@ -25,7 +25,7 @@ def _parse_dirs(raw: str, default: Path) -> tuple[Path, ...]:
 
 _INBOX_DIRS = _parse_dirs(
     os.getenv("VPM_REPORT_SENDER_INBOX_DIR", ""),
-    ROOT / "report_outbox",
+    Path(os.getenv("VPM_REPORTS_OUT_DIR", "")).expanduser() if os.getenv("VPM_REPORTS_OUT_DIR", "").strip() else ROOT / "reports",
 )
 
 
@@ -48,6 +48,7 @@ class Settings:
     review_email: str = os.getenv("VPM_REPORT_SENDER_REVIEW_EMAIL", "") or os.getenv(
         "VPM_REPORT_EMAIL", ""
     )
+    report_email_source: str = os.getenv("VPM_REPORT_EMAIL_SOURCE", "env").strip().lower()
 
     smtp_host: str = os.getenv("VPM_SMTP_HOST", "")
     smtp_port: int = int(os.getenv("VPM_SMTP_PORT") or "587")

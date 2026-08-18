@@ -12,7 +12,14 @@ from vpm_agents.config import settings
 from vpm_agents.core.base import Agent, Tool, ToolResult
 from vpm_agents.core.state import SessionState
 from vpm_agents.tools.geo import remaining_route, six_hour_waypoints
-from vpm_agents.tools.folder_layout import incoming_dir
+from vpm_agents.tools.folder_layout import (
+    PRE_VOYAGE_REPORT,
+    VPA_REPORT,
+    WEATHER_REPORT,
+    incoming_dir,
+    voyage_report_dir,
+    voyage_root,
+)
 from vpm_agents.tools.inbox_io import (
     archive_inbox_file,
     classify_inbox_file,
@@ -22,7 +29,7 @@ from vpm_agents.tools.inbox_io import (
     relocate_inbox_file,
 )
 from vpm_agents.tools.noon_source import archive_finished_drops, get_noon_sources
-from vpm_agents.tools.noon_io import is_arrival_report
+from vpm_agents.tools.noon_io import is_arrival_report, is_departure_report, voyage_has_departed
 from vpm_agents.tools.route_weather import build_voyage_track, format_track_block
 from vpm_agents.tools.storm_cache import last_storms, last_storms_fetched_at, remember_storms
 from vpm_agents.tools.storm_normalize import normalize_active_storms
@@ -77,8 +84,9 @@ def _auth_token(backend: Any) -> str:
     return token
 
 
-def _schedule_weather(registry: VoyageRegistry, voyage_number: str, plan_key: str) -> None:
-    if not settings.weather_report_on_prevoyage:
+def _schedule_passage_weather(registry: VoyageRegistry, voyage_number: str, plan_key: str) -> None:
+    """Queue the next delayed passage weather report (post-departure only)."""
+    if not settings.weather_report_on_noon:
         return
     delay = max(0.0, settings.weather_report_delay_minutes)
     due = _utc_now() + __import__("datetime").timedelta(minutes=delay)
@@ -89,8 +97,14 @@ def _schedule_weather(registry: VoyageRegistry, voyage_number: str, plan_key: st
 
 
 def _voyage_subreports_dir(voyage_number: str) -> Path:
-    """All alternate-route / weather subreports live under reports/{voyage}/subreports/."""
-    d = settings.reports_out_dir / voyage_number / "subreports"
+    """All route-analysis outputs live under .../{vessel}/{voyage}/vpa/."""
+    rec = VoyageRegistry().get(voyage_number) or {}
+    d = voyage_report_dir(
+        settings.reports_out_dir,
+        str(rec.get("vessel_id") or ""),
+        voyage_number,
+        VPA_REPORT,
+    )
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -163,43 +177,39 @@ def _run_immediate_weather(
         token = _auth_token(backend)
         pts = [{"lat": p["lat"], "lon": p["lon"]} for p in plan]
         wx = backend.weather_along_route(token, pts)
-        voyage_dir = settings.reports_out_dir / voy_no
+        vessel_id = str(rec.get("vessel_id") or "")
+        voyage_dir = voyage_root(settings.reports_out_dir, vessel_id, voy_no)
         voyage_dir.mkdir(parents=True, exist_ok=True)
         combined_path = _write_combined(
-            voyage_dir, voy_no, plan, wx, vessel_name=rec.get("vessel_name", ""), prefix="voyage_track_weather"
+            voyage_report_dir(
+                settings.reports_out_dir,
+                vessel_id,
+                voy_no,
+                WEATHER_REPORT,
+            ),
+            voy_no,
+            plan,
+            wx,
+            vessel_name=rec.get("vessel_name", ""),
+            prefix="voyage_track_weather",
         )
         track_data = json.loads(combined_path.read_text())
-        weather_txt = weather_json = None
-        if settings.weather_report_on_prevoyage or settings.weather_report_on_noon:
-            weather_txt, weather_json = write_weather_report(
-                voy_no,
-                track_data,
-                voyage_rec=rec,
-                vessel_id=rec.get("vessel_id", ""),
-                vessel_name=rec.get("vessel_name", ""),
-                plan_label="pre-voyage 6h plan",
-            )
         registry.upsert(
             voy_no,
             {
                 "last_voyage_track": str(combined_path),
-                "last_weather_report": str(weather_txt) if weather_txt else rec.get("last_weather_report"),
                 "weather_summary": {
                     "pointCount": len(wx.get("points", [])),
                     "hardCount": len(wx.get("hardRegions", [])),
                     "provider": wx.get("provider"),
                 },
+                "weather_due_at": None,
             },
         )
-        if settings.weather_report_on_prevoyage:
-            _schedule_weather(registry, voy_no, plan_key)
-        else:
-            registry.upsert(voy_no, {"weather_due_at": None})
         state.artifacts["voyage_track_weather"] = str(combined_path)
         state.note(
             "Weather",
-            f"{voy_no} track+wx → {combined_path}"
-            + (f" report → {weather_txt}" if weather_txt else ""),
+            f"{voy_no} track+wx → {combined_path}",
             elapsed_s=time.monotonic() - t0,
         )
     except Exception as e:
@@ -231,7 +241,6 @@ class PreVoyageIngestAgent(Agent):
         self,
         state: SessionState,
         path: str | Path | None = None,
-        schedule_weather: bool = True,
     ) -> SessionState:
         if not path:
             state.note(self.name, "no path — skip")
@@ -269,9 +278,15 @@ class PreVoyageIngestAgent(Agent):
             # upsert re-keys under compact_voyage_number (keeps L*/B* tags distinct)
             self.registry.upsert(voy_no, record)
 
-            voyage_dir = settings.reports_out_dir / voy_no
+            voyage_dir = voyage_root(settings.reports_out_dir, data["vessel_id"], voy_no)
             voyage_dir.mkdir(parents=True, exist_ok=True)
             (voyage_dir / "master_route.json").write_text(json.dumps(master, indent=2), encoding="utf-8")
+            pre_voyage_dir = voyage_report_dir(
+                settings.reports_out_dir,
+                data["vessel_id"],
+                voy_no,
+                PRE_VOYAGE_REPORT,
+            )
 
             cons = data.get("cp_consumption_mt_day")
             ctx = {
@@ -289,7 +304,7 @@ class PreVoyageIngestAgent(Agent):
                 "alternatives_block": "(four optimized routes are written after route optimize)",
             }
             report_path = write_report(
-                voyage_dir,
+                pre_voyage_dir,
                 f"pre_voyage_route_{_stamp()}.txt",
                 fill_template("pre_voyage_route.txt", ctx),
                 email_pdf=True,
@@ -304,8 +319,6 @@ class PreVoyageIngestAgent(Agent):
                 f"{voy_no} master={len(master)} six_hour={len(plan)} → {report_path.name}",
                 elapsed_s=time.monotonic() - t0,
             )
-            if schedule_weather:
-                _schedule_weather(self.registry, voy_no, "six_hour_plan")
             _enqueue_prevoyage_db(voy_no, record, state)
             if path.exists():
                 archive_inbox_file(path)
@@ -398,10 +411,16 @@ class NoonOpsAgent(Agent):
             pts = [{"lat": p["lat"], "lon": p["lon"]} for p in plan]
             wx = self.backend.weather_along_route(token, pts)
 
-            voyage_dir = settings.reports_out_dir / registry_key
+            vessel_id = str(voy.get("vessel_id") or "")
+            voyage_dir = voyage_root(settings.reports_out_dir, vessel_id, registry_key)
             voyage_dir.mkdir(parents=True, exist_ok=True)
             combined_path = _write_combined(
-                voyage_dir,
+                voyage_report_dir(
+                    settings.reports_out_dir,
+                    vessel_id,
+                    registry_key,
+                    WEATHER_REPORT,
+                ),
                 registry_key,
                 plan,
                 wx,
@@ -411,8 +430,10 @@ class NoonOpsAgent(Agent):
             )
             track_data = json.loads(combined_path.read_text())
 
+            departure = is_departure_report(noon.get("report_type"))
+            has_departed = departure or voyage_has_departed(voy)
             weather_txt = weather_json = None
-            if settings.weather_report_on_noon:
+            if settings.weather_report_on_noon and has_departed:
                 weather_txt, weather_json = write_weather_report(
                     registry_key,
                     track_data,
@@ -439,12 +460,17 @@ class NoonOpsAgent(Agent):
                 "hard_block": bad_block,
             }
             report_path = write_report(
-                voyage_dir, f"noon_7day_report_{_stamp()}.txt", fill_template("noon_7day_report.txt", ctx)
+                voyage_report_dir(
+                    settings.reports_out_dir,
+                    vessel_id,
+                    registry_key,
+                    VPA_REPORT,
+                ),
+                f"noon_7day_report_{_stamp()}.txt",
+                fill_template("noon_7day_report.txt", ctx),
             )
 
-            self.registry.upsert(
-                registry_key,
-                {
+            registry_patch: dict[str, Any] = {
                     "last_noon": noon,
                     "noon_seven_day_plan": plan,
                     "last_voyage_track": str(combined_path),
@@ -452,8 +478,12 @@ class NoonOpsAgent(Agent):
                     "last_bad_weather_json": str(weather_json) if weather_json else voy.get("last_bad_weather_json"),
                     "noon_updated_at": _utc_now().isoformat(),
                     "noon_history": _append_noon_history(voy, noon),
-                },
-            )
+                }
+            if departure:
+                registry_patch["passage_weather_active"] = True
+            self.registry.upsert(registry_key, registry_patch)
+            if departure and settings.weather_report_on_noon:
+                _schedule_passage_weather(self.registry, registry_key, "noon_seven_day_plan")
             if noon.get("noon_id"):
                 self.registry.mark_noon_processed(noon["noon_id"])
 
@@ -698,7 +728,7 @@ class NoonExcelWatchAgent(Agent):
 
 
 class WeatherReportAgent(Agent):
-    """Delayed weather for pre-voyage plan — writes combined track+weather JSON."""
+    """Delayed passage weather — only after a real Departure Report."""
 
     name = "WeatherReportAgent"
 
@@ -709,7 +739,13 @@ class WeatherReportAgent(Agent):
     def _run_one(self, voy_no: str, rec: dict[str, Any]) -> SessionState:
         state = SessionState()
         t0 = time.monotonic()
-        plan_key = rec.get("weather_plan_key") or "six_hour_plan"
+        if not voyage_has_departed(rec):
+            self.registry.upsert(voy_no, {"weather_due_at": None})
+            state.note(self.name, f"{voy_no} skip — voyage not departed yet")
+            return state
+        plan_key = rec.get("weather_plan_key") or (
+            "noon_seven_day_plan" if rec.get("noon_seven_day_plan") else "six_hour_plan"
+        )
         plan = rec.get(plan_key) or []
         if not plan:
             self.registry.upsert(voy_no, {"weather_due_at": None})
@@ -718,24 +754,34 @@ class WeatherReportAgent(Agent):
             token = _auth_token(self.backend)
             pts = [{"lat": p["lat"], "lon": p["lon"]} for p in plan]
             wx = self.backend.weather_along_route(token, pts)
-            voyage_dir = settings.reports_out_dir / voy_no
+            vessel_id = str(rec.get("vessel_id") or "")
+            voyage_dir = voyage_root(settings.reports_out_dir, vessel_id, voy_no)
             voyage_dir.mkdir(parents=True, exist_ok=True)
             combined_path = _write_combined(
-                voyage_dir, voy_no, plan, wx, vessel_name=rec.get("vessel_name", ""), prefix="voyage_track_weather"
+                voyage_report_dir(
+                    settings.reports_out_dir,
+                    vessel_id,
+                    voy_no,
+                    WEATHER_REPORT,
+                ),
+                voy_no,
+                plan,
+                wx,
+                vessel_name=rec.get("vessel_name", ""),
+                prefix="voyage_track_weather",
             )
             track = json.loads(combined_path.read_text())
-            if settings.weather_report_on_prevoyage:
+            weather_txt = weather_json = None
+            if settings.weather_report_on_noon:
                 weather_txt, weather_json = write_weather_report(
                     voy_no,
                     track,
                     voyage_rec=rec,
                     vessel_id=rec.get("vessel_id", ""),
                     vessel_name=rec.get("vessel_name", ""),
-                    plan_label="6-hour pre-voyage plan",
+                    plan_label="7-day noon track",
                     spec=self.spec,
                 )
-            else:
-                weather_txt = weather_json = None
             self.registry.upsert(
                 voy_no,
                 {
@@ -760,7 +806,7 @@ class WeatherReportAgent(Agent):
         due: list[tuple[str, dict]] = []
         for voy_no, rec in self.registry.all().items():
             raw = rec.get("weather_due_at")
-            if not raw:
+            if not raw or not voyage_has_departed(rec):
                 continue
             try:
                 due_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
@@ -918,7 +964,12 @@ class PreVoyageRouteOptimizeAgent(Agent):
             txt_path = write_report(sub_dir, f"route_alternatives_{trigger}_{stamp}.txt", txt_body)
             if trigger == "noon":
                 write_report(
-                    settings.reports_out_dir / voy_no,
+                    voyage_report_dir(
+                        settings.reports_out_dir,
+                        str(rec.get("vessel_id") or ""),
+                        voy_no,
+                        VPA_REPORT,
+                    ),
                     f"route_alternatives_{trigger}_{stamp}.txt",
                     txt_body,
                     email_pdf=True,
@@ -926,7 +977,8 @@ class PreVoyageRouteOptimizeAgent(Agent):
                 )
 
             if trigger == "pre_voyage":
-                voyage_dir = settings.reports_out_dir / voy_no
+                vessel_id = str(rec.get("vessel_id") or "")
+                voyage_dir = voyage_root(settings.reports_out_dir, vessel_id, voy_no)
                 cons_line = f"CP consumption: {cons} MT/day" if cons is not None else ""
                 pv_ctx = {
                     "voyage_number": voy_no,
@@ -970,7 +1022,12 @@ class PreVoyageRouteOptimizeAgent(Agent):
                 except Exception as e:
                     state.note(self.name, f"{voy_no} route map failed: {e}")
                 write_report(
-                    voyage_dir,
+                    voyage_report_dir(
+                        settings.reports_out_dir,
+                        vessel_id,
+                        voy_no,
+                        PRE_VOYAGE_REPORT,
+                    ),
                     f"pre_voyage_route_{stamp}.txt",
                     pv_body,
                     email_pdf=True,
@@ -1019,7 +1076,7 @@ class PreVoyageRouteOptimizeAgent(Agent):
             state.note(
                 self.name,
                 f"{voy_no} [{trigger}] alternatives={len(routes)} "
-                f"suggested={data.get('suggested_id')} → subreports/{index_path.name}",
+                f"suggested={data.get('suggested_id')} → {index_path.parent.name}/{index_path.name}",
                 elapsed_s=time.monotonic() - t0,
             )
             if (settings.route_opt_method or "").strip().lower() == "llm":

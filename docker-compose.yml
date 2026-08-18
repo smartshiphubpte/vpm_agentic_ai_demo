@@ -18,17 +18,15 @@ x-vpm: &vpm
     VPM_NOON_INBOX_DIR: /data/noon
     VPM_STORM_OUT_DIR: /data/storm
     VPM_REPORTS_OUT_DIR: /data/reports
-    VPM_WEATHER_OUT_DIR: /data/weather
     VPM_TEMPLATES_DIR: /data/templates
     VPM_REGISTRY_PATH: /data/registry
     VPM_JOBS_DIR: /data/jobs
-    VPM_REPORT_SENDER_INBOX_DIR: /data/reports,/data/weather,/data/storm
+    VPM_REPORT_SENDER_INBOX_DIR: /data/reports,/data/storm
   volumes:
     - ${VPM_INBOX_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_inbox_dir}:/data/inbox
     - ${VPM_NOON_INBOX_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_noon_inbox_dir}:/data/noon
     - ${VPM_STORM_OUT_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_Storm_out_dir}:/data/storm
     - ${VPM_REPORTS_OUT_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_report_out_dir}:/data/reports
-    - ${VPM_WEATHER_OUT_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_weather_out_dir}:/data/weather
     - ${VPM_TEMPLATES_DIR:-./templates}:/data/templates
     - ${VPM_REGISTRY_PATH:-/home/gunish/Projects/vpm_agentic_Data/vpm_registry_dir}:/data/registry
     - ${VPM_JOBS_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_jobs}:/data/jobs
@@ -56,6 +54,10 @@ services:
   storm:
     <<: *vpm
     command: ["python3", "scripts/run_service.py", "storm"]
+
+  port-weather:
+    <<: *vpm
+    command: ["python3", "scripts/run_service.py", "port_weather"]
 
   report-sender:
     <<: *vpm

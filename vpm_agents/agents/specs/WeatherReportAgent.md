@@ -2,15 +2,16 @@
 
 ## Role
 
-After pre-voyage or noon ingest, wait `VPM_WEATHER_REPORT_DELAY_MINUTES` then fetch weather along the active plan and write a report.
+After a **Departure Report** (noon), wait `VPM_WEATHER_REPORT_DELAY_MINUTES` then fetch weather along the active plan and write a passage weather report. Pre-voyage ingest does **not** trigger passage weather.
 
 ## Objective
 
-Generate a templated weather report (and JSON points file) under `VPM_REPORTS_OUT_DIR/{voyage_number}/` when `weather_due_at` elapses.
+Generate a templated passage weather report (and JSON) under `VPM_WEATHER_OUT_DIR/{voyage_number}/` when `weather_due_at` elapses **and** the voyage has departed.
 
 ## Preconditions
 
-- Voyage in registry with `weather_due_at` ≤ now and a waypoint plan (`six_hour_plan` or `noon_seven_day_plan`).
+- Voyage in registry with `passage_weather_active` (set on Departure Report ingest).
+- `weather_due_at` ≤ now and a waypoint plan (`noon_seven_day_plan` preferred, else `six_hour_plan`).
 
 ## Tasks
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from vpm_agents.config import settings
+from vpm_agents.tools.folder_layout import WEATHER_REPORT, voyage_report_dir
 from vpm_agents.tools.geo import initial_bearing_deg, remaining_route, route_length_nm
 from vpm_agents.tools.marine_units import (
     beaufort_from_kn,
@@ -19,11 +20,8 @@ from vpm_agents.tools.route_weather import format_track_block
 from vpm_agents.tools.templates import fill_template, write_text_pdf
 
 
-def weather_out_dir(voyage_number: str) -> Path:
-    base = Path(settings.weather_out_dir)
-    out = base / voyage_number
-    out.mkdir(parents=True, exist_ok=True)
-    return out
+def weather_out_dir(voyage_number: str, vessel_id: str = "") -> Path:
+    return voyage_report_dir(Path(settings.reports_out_dir), vessel_id, voyage_number, WEATHER_REPORT)
 
 
 def weather_limits_from(spec: Any | None = None) -> dict[str, float]:
@@ -375,7 +373,7 @@ def write_weather_report(
     stamp: str | None = None,
     spec: Any | None = None,
 ) -> tuple[Path, Path]:
-    """Write passage PDF + extended bad_weather json under VPM_WEATHER_OUT_DIR/{voyage}/."""
+    """Write passage PDF + JSON under reports/{imo}/{voyage}/weather_report/."""
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     lim = weather_limits_from(spec)
     events = extract_bad_weather_events(
@@ -386,7 +384,7 @@ def write_weather_report(
     )
     rows = build_passage_weather_rows(track)
     particulars = _voyage_particulars(voyage_rec, track)
-    out_dir = weather_out_dir(voyage_number)
+    out_dir = weather_out_dir(voyage_number, vessel_id)
     generated_at = datetime.now(timezone.utc).isoformat()
     rec = voyage_rec or {}
 

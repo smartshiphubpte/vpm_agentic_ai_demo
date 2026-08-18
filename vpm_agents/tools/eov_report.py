@@ -12,6 +12,7 @@ from vpm_agents.config import settings
 from vpm_agents.core.llm import chat
 from vpm_agents.tools.agent_log import progress
 from vpm_agents.tools.eov_compute import compute_eov_report, good_weather_filter
+from vpm_agents.tools.folder_layout import END_OF_VOYAGE_REPORT, voyage_report_dir
 
 
 def _stamp() -> str:
@@ -453,7 +454,7 @@ def build_end_of_voyage_report(
     voyage_number: str,
     token: str = "",
 ) -> dict[str, Any]:
-    """Part-by-part EOV generation → reports/{voyage}/end_of_voyage_report_*.pdf|json."""
+    """Part-by-part EOV generation → reports/{imo}/{voyage}/end_of_voyage_report/."""
     t0 = time.monotonic()
     rec, key = registry.find_voyage(voyage_number)
     if not rec or not key:
@@ -466,8 +467,7 @@ def build_end_of_voyage_report(
     progress("EOVReport", f"{key} resolve data")
     data = resolve_eov_data(backend, token, rec, key)
 
-    out_dir = settings.reports_out_dir / key
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = voyage_report_dir(settings.reports_out_dir, str(rec.get("vessel_id") or ""), key, END_OF_VOYAGE_REPORT)
     assets = out_dir / "eov_assets"
     assets.mkdir(parents=True, exist_ok=True)
 

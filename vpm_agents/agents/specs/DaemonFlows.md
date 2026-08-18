@@ -16,8 +16,10 @@ continues for other voyages.
 
 **Parallelism:** each loop is its own process (Docker Compose) or poller thread (`run_daemon.py`).
 They share the voyage registry JSON, drop folders, storm snapshots, and a file job bus
-(`VPM_JOBS_DIR`). Ingest never waits for route-opt: it writes `weather_due_at` on the
-registry and a `routeopt:…` job file, then picks up the next Excel. StormWatchAgent
+(`VPM_JOBS_DIR`). Ingest never waits for route-opt: it drops a `routeopt:…` job file, then
+picks up the next Excel. **Passage weather reports** start only after a real **Departure
+Report** (noon); pre-voyage ingest still fetches weather for route scoring but does not
+write passage PDFs or set `weather_due_at`. StormWatchAgent
 **never joins the job queue** — it fetches on its timer; route-opt only reads the last
 snapshot (`storm_cache` / `storms_*.json`). Arrival noon still queues EOV on a background
 thread inside the noon service (`VPM_EOV_ON_ARRIVAL`). Closed voyages (`eov_status=done`
@@ -27,8 +29,8 @@ or last noon was Arrival) are not route-optimized again.
 
 | Tag | One-shot on pre-voyage Excel | Background (keeps running) |
 |-----|------------------------------|----------------------------|
-| `pre_voyage_weather` | ingest → weather | weather reports on delay |
-| `pre_voyage_routes` | ingest → weather → route_optimize | weather reports on delay |
+| `pre_voyage_weather` | ingest → weather | passage weather after Departure Report |
+| `pre_voyage_routes` | ingest → weather → route_optimize | passage weather after Departure Report |
 | `noon_monitoring` | ingest only | noon Excel poll |
 | `storm_monitoring` | ingest only | storm poll |
 | `full` | ingest → weather → route_optimize | weather + noon + storm |

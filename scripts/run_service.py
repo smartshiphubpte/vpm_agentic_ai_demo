@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one VoyagePM microservice (ingest | noon | weather | routeopt | storm | report_sender)."""
+"""Run one VoyagePM microservice (ingest | noon | weather | routeopt | storm | report_sender | port_weather)."""
 
 from __future__ import annotations
 

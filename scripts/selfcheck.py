@@ -59,12 +59,27 @@ def _continuous_cycle() -> None:
     )
     assert_true(settings.registry_path.is_file(), "registry not written")
     assert_true(any(settings.storm_out_dir.glob("storms_*.json")), "storm snapshot missing")
-    voy_dir = settings.reports_out_dir / "VYG-2026-001"
+    from vpm_agents.tools.folder_layout import (
+        PRE_VOYAGE_REPORT,
+        VPA_REPORT,
+        WEATHER_REPORT,
+        voyage_report_dir,
+        voyage_root,
+    )
+
+    voy_dir = voyage_root(settings.reports_out_dir, "9184902", "VYG-2026-001")
     assert_true((voy_dir / "master_route.json").is_file(), "master_route missing")
-    assert_true(any(voy_dir.glob("pre_voyage_route_*.txt")), "pre-voyage report missing")
-    assert_true(any(voy_dir.glob("noon_7day_report_*.txt")), "noon report missing")
     assert_true(
-        any(voy_dir.glob("voyage_track_weather_*.json")) or any(voy_dir.glob("weather_report_*.pdf")),
+        any(voyage_report_dir(settings.reports_out_dir, "9184902", "VYG-2026-001", PRE_VOYAGE_REPORT).glob("pre_voyage_route_*.txt")),
+        "pre-voyage report missing",
+    )
+    assert_true(
+        any(voyage_report_dir(settings.reports_out_dir, "9184902", "VYG-2026-001", VPA_REPORT).glob("noon_7day_report_*.txt")),
+        "noon report missing",
+    )
+    assert_true(
+        any(voyage_report_dir(settings.reports_out_dir, "9184902", "VYG-2026-001", WEATHER_REPORT).glob("voyage_track_weather_*.json"))
+        or any(voyage_report_dir(settings.reports_out_dir, "9184902", "VYG-2026-001", WEATHER_REPORT).glob("weather_report_*.pdf")),
         "combined track+weather missing",
     )
 

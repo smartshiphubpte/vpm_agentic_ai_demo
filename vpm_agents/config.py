@@ -138,7 +138,7 @@ class Settings:
         "yes",
     )
     weather_report_on_prevoyage: bool = os.getenv(
-        "VPM_WEATHER_REPORT_ON_PREVOYAGE", "true"
+        "VPM_WEATHER_REPORT_ON_PREVOYAGE", "false"
     ).lower() in ("1", "true", "yes")
 
     # Auto-email generated report PDFs. env = VPM_REPORT_EMAIL; db = placeholder (wire later)

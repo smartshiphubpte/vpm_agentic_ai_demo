@@ -20,12 +20,13 @@ Use pre-voyage CP speed + remaining master route from noon position; emit a temp
 2. Load voyage from registry (speed + master waypoints).
 3. Build remaining route from noon lat/lon.
 4. Generate 6h waypoints for `VPM_NOON_HORIZON_HOURS` (default 168 = 7 days).
-5. Fetch weather along plan; write combined track + optional weather report.
-6. Fill `noon_7day_report.txt` template; write report.
-7. Recompute the 4 storm-aware alternate routes from current position + remaining
+5. Fetch weather along plan; write combined track JSON.
+6. If report type is **Departure Report** (or voyage already departed), write passage weather report and schedule delayed weather.
+7. Fill `noon_7day_report.txt` template; write report.
+8. Recompute the 4 storm-aware alternate routes from current position + remaining
    waypoints into `reports/{voyage}/subreports/`. In daemon forever mode this is queued on
    the heavy pool so noon ingest of the next row does not wait.
-8. Archive file to processed/failed.
+9. Archive file to processed/failed.
 
 ## Tools
 

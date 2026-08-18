@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from vpm_agents.config import settings
+from vpm_agents.tools.folder_layout import WEATHER_REPORT, voyage_report_dir
 from vpm_agents.tools.geo import haversine_nm, initial_bearing_deg
 from vpm_agents.tools.marine_units import beaufort_from_kn, compass_label, format_latlon_dms
 from vpm_agents.tools.route_json import parse_route_points
@@ -128,8 +129,12 @@ def write_storm_voyage_report(
     """Write per-voyage cyclone txt + json; keeps storm snapshot fields in json payload."""
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     generated_at = datetime.now(timezone.utc).isoformat()
-    out_dir = storm_out_dir() / voyage_number
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = voyage_report_dir(
+        settings.reports_out_dir,
+        str(voyage_rec.get("vessel_id") or ""),
+        voyage_number,
+        WEATHER_REPORT,
+    )
 
     route = parse_route_points(
         voyage_rec.get("noon_seven_day_plan")

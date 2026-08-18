@@ -132,8 +132,7 @@ class PreVoyageFlowRunner:
                 state.note("FlowRunner", f"start {step}")
                 t0 = time.monotonic()
                 try:
-                    schedule = flow_weather_poll(self.flow) and "weather" in steps
-                    state = self._ingest.run(state, path=path, schedule_weather=schedule)
+                    state = self._ingest.run(state, path=path)
                 except Exception as e:
                     state.note("FlowRunner", f"{step} FAILED: {e}", elapsed_s=time.monotonic() - t0)
                 else:
@@ -173,8 +172,8 @@ class PreVoyageFlowRunner:
 
         rec = self.registry.get(voy) or {}
         if "weather" in steps:
-            # weather_due_at already set by ingest; weather service polls the registry
-            state.note("FlowRunner", f"weather handoff {voy} due_at={rec.get('weather_due_at')}")
+            # weather_due_at is set on Departure Report ingest, not pre-voyage
+            state.note("FlowRunner", f"weather handoff {voy} (post-departure only)")
         if "route_optimize" in steps:
             key = f"routeopt:{voy}:pre_voyage"
             if job_bus.enqueue(

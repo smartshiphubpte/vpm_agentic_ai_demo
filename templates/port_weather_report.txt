@@ -1,0 +1,47 @@
+MARINE WEATHER & NAVIGATIONAL ADVISORY
+
+Port Weather Report
+{vessel_display} · Voyage {voyage_number}
+Port: {port_name}
+Position: {position}
+Arrived: {arrived_at}
+Report Date: {report_date}
+
+Prepared by SmartShip Hub
+
+════════════════════════════════════════════════════════════════════════
+1. Port Particulars
+
+  Vessel                  {vessel_display}
+  Voyage                  {voyage_number}
+  Port                    {port_name}
+  Position                {position}
+  Arrival report          {arrived_at}
+  Forecast window         {weather_window}
+  Refresh interval        every {interval_hours} h (while in port)
+
+════════════════════════════════════════════════════════════════════════
+2. Port Forecast ({weather_window})
+{forecast_table}
+{highlight_note}
+
+2.1 Summary
+{summary_block}
+
+════════════════════════════════════════════════════════════════════════
+3. Outlook while in port
+
+3.1 Forecast outlook
+{outlook_block}
+
+3.2 Precautions alongside / at anchorage
+{precautions_block}
+
+════════════════════════════════════════════════════════════════════════
+Appendix — Expected Bad Weather ({event_count} event(s))
+{bad_weather_block}
+
+Provider: {provider}  |  Limits: wind ≥ {wind_limit_kn} kn, wave ≥ {wave_limit_m} m, swell ≥ {swell_limit_m} m
+Generated: {generated_at}
+
+Prepared by SmartShip Hub · {vessel_display} — {voyage_number} @ {port_name}

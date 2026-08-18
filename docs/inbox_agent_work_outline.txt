@@ -1,0 +1,36 @@
+Inbox Agent - Simple Work Outline
+=================================
+
+Goal
+- Fetch operational emails and load validated report data into the database safely.
+
+What will be done
+1) Connect to mailbox
+   - Read new emails incrementally using checkpoint tracking.
+
+2) Parse emails and attachments
+   - Extract body, tables, and files from common formats.
+
+3) Classify report type
+   - Detect whether email is valid.
+
+4) Extract structured fields
+   - Convert free-form content into canonical report fields.
+
+5) Validate and enrich data
+   - Apply required-field checks, normalize units/time, add vessel context.
+
+6) Save to database
+   - Perform idempotent writes to avoid duplicate report creation.
+
+7) Handle failures safely
+   - Add retries for temporary errors and dead-letter for hard failures.
+
+8) Add monitoring and support tools
+   - Log processing stages, expose metrics, and allow replay of failed emails.
+
+Expected deliverables
+- Working inbox polling flow.
+- Reliable DB persistence with dedupe.
+- Failure handling + replay mechanism.
+- Basic operational observability (logs/metrics/alerts).

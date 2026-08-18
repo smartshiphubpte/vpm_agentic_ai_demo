@@ -293,6 +293,8 @@ def parse_predep_workbook(path: Path) -> dict[str, Any]:
 
         vessel_id = str(imo).strip() if imo is not None else (str(vessel_name).strip() if vessel_name else "")
         cond = _pick(fields, "condition (ballast/laden)", "condition")
+        etd = _pick(fields, "estimated departure time", "estimated date of departure", "etd")
+        eta = _pick(fields, "estimated arrival time", "estimated date of arrival", "eta")
         return {
             "voyage_number": normalize_voyage_number(str(voyage_number)),
             "vessel_id": vessel_id,
@@ -307,8 +309,8 @@ def parse_predep_workbook(path: Path) -> dict[str, Any]:
             "source_file": str(path),
             "format": "predep_xlsx",
             "condition": "" if cond is None else str(cond).strip(),
-            "etd": str(_pick(fields, "estimated departure time") or "").strip(),
-            "eta": str(_pick(fields, "estimated arrival time") or "").strip(),
+            "etd": "" if etd is None else str(etd).strip(),
+            "eta": "" if eta is None else str(eta).strip(),
             "displacement": _pick(fields, "displacement", numeric=True),
             "cargo_weight": _pick(fields, "cargo weight", numeric=True),
             "max_draft_on_departure": _pick(
@@ -435,6 +437,7 @@ def parse_pre_voyage(path: str | Path) -> dict[str, Any]:
     return {
         "voyage_number": normalize_voyage_number(row["voyage_number"]),
         "vessel_id": row["vessel_id"],
+        "vessel_name": row.get("vessel_name", ""),
         "source_port": row["source_port"],
         "dest_port": row["dest_port"],
         "cp_speed_kn": float(row["cp_speed_kn"]),
@@ -443,6 +446,8 @@ def parse_pre_voyage(path: str | Path) -> dict[str, Any]:
         "master_waypoints": _parse_waypoint_field(row["waypoints"]),
         "source_file": str(path),
         "format": "flat",
+        "etd": str(row.get("etd") or row.get("estimated_departure_time") or row.get("estimated_date_of_departure") or "").strip(),
+        "eta": str(row.get("eta") or row.get("estimated_arrival_time") or row.get("estimated_date_of_arrival") or "").strip(),
     }
 
 
@@ -458,6 +463,7 @@ def parse_noon_report(path: str | Path) -> dict[str, Any]:
         "lat": float(row["lat"]),
         "lon": float(row["lon"]),
         "observed_at": row.get("observed_at") or None,
+        "report_type": str(row.get("report_type") or "").strip() or None,
         "source_file": str(path),
     }
 
