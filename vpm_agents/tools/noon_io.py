@@ -32,6 +32,25 @@ def _norm_col(h: str) -> str:
     return re.sub(r"\s+", "_", h.strip().lower())
 
 
+def noon_observed_sort_key(row: dict[str, Any]) -> tuple[int, float, str]:
+    """Sort key for oldest-first noon processing."""
+    raw = row.get("observed_at")
+    if raw:
+        try:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (0, dt.timestamp(), str(row.get("noon_id") or ""))
+        except ValueError:
+            pass
+    return (1, 0.0, str(row.get("noon_id") or ""))
+
+
+def sort_noon_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return rows oldest observed_at first (stable tie-break on noon_id)."""
+    return sorted(rows, key=noon_observed_sort_key)
+
+
 def noon_row_id(row: dict[str, Any]) -> str:
     rid = row.get("report_id") or row.get("id")
     if rid is not None and str(rid).strip():
@@ -194,3 +213,13 @@ def _noonreportdata_from_row(cell: Any) -> dict[str, Any]:
 def is_arrival_report(report_type: str | None) -> bool:
     t = (report_type or "").strip().lower()
     return "arrival" in t
+
+
+if __name__ == "__main__":
+    rows = [
+        {"noon_id": "b", "observed_at": "2026-01-02T00:00:00Z"},
+        {"noon_id": "a", "observed_at": "2026-01-01T00:00:00Z"},
+        {"noon_id": "c", "observed_at": None},
+    ]
+    assert [r["noon_id"] for r in sort_noon_rows(rows)] == ["a", "b", "c"]
+    print("noon_io self-check ok")

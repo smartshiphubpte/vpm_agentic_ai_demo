@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from vpm_agents.config import ROOT, settings
+from vpm_agents.tools.folder_layout import incoming_dir
 
 
 def templates_dir() -> Path:
@@ -44,8 +45,9 @@ def write_report(
     *,
     email_pdf: bool = False,
     voyage_number: str = "",
+    pdf_images: list[Path] | None = None,
 ) -> Path:
-    """Write .txt report. If email_pdf, also write a PDF sibling (auto-emailed)."""
+    """Write .txt report. If email_pdf, also write a PDF sibling (picked up by report_sender)."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / filename
@@ -56,6 +58,8 @@ def write_report(
             Path(filename).with_suffix(".pdf").name,
             body,
             voyage_number=voyage_number,
+            for_send=True,
+            images=pdf_images,
         )
     return path
 
@@ -87,7 +91,13 @@ def _mono_font_path() -> Path | None:
 
 
 def write_text_pdf(
-    out_dir: Path, filename: str, body: str, *, voyage_number: str = ""
+    out_dir: Path,
+    filename: str,
+    body: str,
+    *,
+    voyage_number: str = "",
+    for_send: bool = False,
+    images: list[Path] | None = None,
 ) -> Path:
     """Render preformatted report text to landscape A4 PDF (monospace, multi-page)."""
     from fpdf import FPDF
@@ -95,7 +105,8 @@ def write_text_pdf(
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / filename
+    path = (incoming_dir(out_dir) if for_send else out_dir) / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.set_margins(8, 8, 8)
@@ -116,8 +127,17 @@ def write_text_pdf(
     for line in text.splitlines():
         pdf.cell(0, line_height, line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    pdf.output(str(path))
-    from vpm_agents.tools.report_email import send_report_pdf
+    for img in images or []:
+        img = Path(img)
+        if not img.is_file():
+            continue
+        pdf.add_page()
+        pdf.set_font("Mono" if font_path else "Courier", size=9)
+        pdf.cell(0, 6, img.stem.replace("_", " "), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        try:
+            pdf.image(str(img), w=270)
+        except Exception as e:
+            pdf.cell(0, 5, f"(map image failed: {e})", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    send_report_pdf(path, voyage_number=voyage_number or out_dir.name)
+    pdf.output(str(path))
     return path

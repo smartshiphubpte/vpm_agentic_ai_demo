@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Local / secrets
+.env
+.git
+.cursor
+
+# Runtime data (mounted as volumes)
+data/
+inbox/
+noon_inbox/
+storm_alerts/
+reports/
+weather_reports/
+report_outbox/
+
+# Noise
+*.md
+!README.md
+.pytest_cache/
+samples/
+gui/
+temp.json

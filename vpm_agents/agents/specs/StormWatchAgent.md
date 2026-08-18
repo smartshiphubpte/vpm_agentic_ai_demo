@@ -3,6 +3,9 @@
 ## Role
 
 Independent storm alert poller — runs whether or not any voyage is active.
+Never queued behind ingest or route-optimize: the daemon storm thread fetches on
+`VPM_STORM_INTERVAL_HOURS` and publishes a snapshot; route-opt and others only
+read that last snapshot (no live NHC/JTWC call from those jobs).
 
 ## Objective
 
@@ -28,7 +31,8 @@ buffers.
 
 1. Run storm watcher refresh (backend mode only; live mode skips BE watcher).
 2. Fetch active storms from `VPM_STORM_SOURCE` — includes center, area/radius, and
-   progression track (present + forecast).
+   progression track (present + forecast). Publish to `storm_cache` immediately so
+   route-opt can use this snapshot while reports/email still write.
 3. Assess each voyage route against center buffer (`VPM_STORM_CENTER_BUFFER_NM`,
    default 500) and edge buffer (`VPM_STORM_EDGE_BUFFER_NM`, default 300).
 4. Write timestamped `.json` + templated `.txt` into storm out folder.
@@ -52,7 +56,7 @@ buffers.
 
 - `VPM_STORM_OUT_DIR/storms_*.json`
 - `VPM_STORM_OUT_DIR/storms_*.txt`
-- `state.storms`
+- `state.storms` / in-memory `storm_cache` (route-opt reads this, never live-fetches)
 
 ## Failure
 

@@ -466,7 +466,11 @@ def write_weather_report(
     }
     body = _fill_passage_template("passage_weather_report.txt", ctx)
     pdf_path = write_text_pdf(
-        out_dir, f"weather_report_{stamp}.pdf", body, voyage_number=voyage_number
+        out_dir,
+        f"weather_report_{stamp}.pdf",
+        body,
+        voyage_number=voyage_number,
+        for_send=True,
     )
     return pdf_path, json_path
 

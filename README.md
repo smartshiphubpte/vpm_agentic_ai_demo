@@ -35,11 +35,28 @@ python3 scripts/run_cli.py --goal "re-route around the storm and alert the fleet
 # Continuous ops (inbox Excel + storm poller)
 # Fill VPM_INBOX_DIR / VPM_STORM_OUT_DIR / VPM_REPORTS_OUT_DIR / VPM_TEMPLATES_DIR in .env
 python3 scripts/run_daemon.py --once          # one cycle
-python3 scripts/run_daemon.py                 # always-on loop
+python3 scripts/run_daemon.py                 # always-on loop (all pollers in one process)
 
-# Compare master vs calculated route on a map (upload two JSON files)
-python3 scripts/run_route_viewer.py           # http://127.0.0.1:8765/route_compare.html
+# Docker microservices (preferred for ops — each loop in its own container)
+docker compose up --build
+# Scale the slow one independently:
+# docker compose up --scale routeopt=4
 ```
+
+Shared state across containers is the voyage registry JSON, drop folders, and `VPM_JOBS_DIR` (file job bus). They do not wait on each other.
+
+| Container | Agent | Waits on |
+|-----------|--------|----------|
+| `ingest` | InboxWatch + PreVoyageIngest | inbox folder |
+| `noon` | NoonExcelWatch + NoonOps + EOV | noon folder + registry |
+| `weather` | WeatherReport | registry `weather_due_at` |
+| `routeopt` | PreVoyageRouteOptimize | job files from ingest/noon |
+| `storm` | StormWatch | timer (writes snapshots others read) |
+| `report-sender` | report_sender | PDF folders + optional DBs |
+
+Do not run `run_daemon.py` and Compose at the same time — they would double-pick inbox files.
+
+**Folder layout:** each drop/output root uses `incoming/` (new work) and `sent/` (done / emailed). Drop pre-voyage and noon files in `{inbox}/incoming/`, not the root.
 
 `VPM_MODE=mock` (default) runs fully offline against an in-memory backend that mirrors `voyagepm_be` APIs. Set `VPM_MODE=live` + `VPM_BASE_URL` to drive a real backend.
 

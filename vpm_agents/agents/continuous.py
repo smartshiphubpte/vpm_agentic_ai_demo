@@ -12,20 +12,23 @@ from vpm_agents.config import settings
 from vpm_agents.core.base import Agent, Tool, ToolResult
 from vpm_agents.core.state import SessionState
 from vpm_agents.tools.geo import remaining_route, six_hour_waypoints
+from vpm_agents.tools.folder_layout import incoming_dir
 from vpm_agents.tools.inbox_io import (
     archive_inbox_file,
     classify_inbox_file,
     list_inbox,
     parse_noon_report,
     parse_pre_voyage,
+    relocate_inbox_file,
 )
-from vpm_agents.tools.noon_source import FolderNoonSource, archive_finished_drops, get_noon_sources
+from vpm_agents.tools.noon_source import archive_finished_drops, get_noon_sources
 from vpm_agents.tools.noon_io import is_arrival_report
 from vpm_agents.tools.route_weather import build_voyage_track, format_track_block
+from vpm_agents.tools.storm_cache import last_storms, last_storms_fetched_at, remember_storms
 from vpm_agents.tools.storm_normalize import normalize_active_storms
 from vpm_agents.tools.storm_proximity import assess_all_voyages
 from vpm_agents.tools.templates import fill_template, format_waypoints, write_report
-from vpm_agents.tools.voyage_registry import VoyageRegistry, normalize_voyage_number
+from vpm_agents.tools.voyage_registry import VoyageRegistry, compact_voyage_number, voyage_is_closed
 from vpm_agents.tools.storm_report import write_storm_voyage_reports
 from vpm_agents.tools.weather_report import (
     extract_bad_weather_events,
@@ -44,6 +47,27 @@ def _utc_now() -> datetime:
 def _stamp() -> str:
     return _utc_now().strftime("%Y%m%dT%H%M%SZ")
 
+
+def _enqueue_prevoyage_db(voy_no: str, record: dict[str, Any], state: SessionState) -> None:
+    """Hand off to prevoyage_db microservice (no DB creds in ingest)."""
+    tenant = (settings.tenant or "").strip().lower()
+    if not tenant:
+        state.note("PreVoyageIngestAgent", "VPM_TENANT unset — skip prevoyage_db job", quiet=True)
+        return
+    from vpm_agents.tools import job_bus
+
+    key = f"prevoyage_db:{tenant}:{voy_no}"
+    if job_bus.enqueue(
+        key,
+        {
+            "kind": "prevoyage_db",
+            "tenant": tenant,
+            "voyage_number": voy_no,
+            "record": record,
+        },
+        root=settings.jobs_dir,
+    ):
+        state.note("PreVoyageIngestAgent", f"queued {key} for DB ingest")
 
 def _auth_token(backend: Any) -> str:
     login = backend.login(settings.email, settings.password)
@@ -116,7 +140,7 @@ def _write_combined(
     )
     annotate_track_hard(combined)
     path = voyage_dir / f"{prefix}_{_stamp()}.json"
-    path.write_text(json.dumps(combined, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(combined, indent=2, default=str), encoding="utf-8")
     return path
 
 
@@ -219,11 +243,14 @@ class PreVoyageIngestAgent(Agent):
             master = data["master_waypoints"]
             speed = data["cp_speed_kn"]
             plan = six_hour_waypoints(master, speed, interval_h=settings.waypoint_interval_hours)
-            voy_no = normalize_voyage_number(data["voyage_number"])
+            voy_no = compact_voyage_number(data["voyage_number"])
+            self.registry.forget_voyage_noons(voy_no)
             record = {
                 **{k: data[k] for k in (
                     "voyage_number", "vessel_id", "source_port", "dest_port",
                     "cp_speed_kn", "alert_emails", "master_waypoints", "source_file",
+                    "displacement", "cargo_weight", "max_draft_on_departure",
+                    "voyage_priority",
                 ) if k in data},
                 "vessel_name": data.get("vessel_name", ""),
                 "format": data.get("format", ""),
@@ -235,8 +262,11 @@ class PreVoyageIngestAgent(Agent):
                 "six_hour_plan": plan,
                 "ingested_at": _utc_now().isoformat(),
                 "last_noon": None,
+                "noon_history": [],
+                "eov_status": None,
+                "noon_seven_day_plan": None,
             }
-            # upsert re-keys under normalize_voyage_number (keeps L*/B* tags distinct)
+            # upsert re-keys under compact_voyage_number (keeps L*/B* tags distinct)
             self.registry.upsert(voy_no, record)
 
             voyage_dir = settings.reports_out_dir / voy_no
@@ -276,8 +306,9 @@ class PreVoyageIngestAgent(Agent):
             )
             if schedule_weather:
                 _schedule_weather(self.registry, voy_no, "six_hour_plan")
+            _enqueue_prevoyage_db(voy_no, record, state)
             if path.exists():
-                archive_inbox_file(path, "processed")
+                archive_inbox_file(path)
         except Exception as e:
             state.note(self.name, f"failed {Path(path).name}: {e}", elapsed_s=time.monotonic() - t0)
             if Path(path).exists():
@@ -308,6 +339,8 @@ class NoonOpsAgent(Agent):
         state: SessionState,
         path: str | Path | None = None,
         noon: dict[str, Any] | None = None,
+        *,
+        enqueue_route_opt: bool = False,
     ) -> SessionState:
         if noon is None and path:
             try:
@@ -318,13 +351,15 @@ class NoonOpsAgent(Agent):
         if not noon:
             state.note(self.name, "no noon data — skip")
             return state
-        return self._process_noon(state, noon, path)
+        return self._process_noon(state, noon, path, enqueue_route_opt=enqueue_route_opt)
 
     def _process_noon(
         self,
         state: SessionState,
         noon: dict[str, Any],
         path: str | Path | None = None,
+        *,
+        enqueue_route_opt: bool = False,
     ) -> SessionState:
         try:
             voy, registry_key = self.registry.find_voyage(noon["voyage_number"])
@@ -332,6 +367,14 @@ class NoonOpsAgent(Agent):
                 raise ValueError(
                     f"no pre-voyage registry for {noon['voyage_number']} — ingest pre-voyage first"
                 )
+            if voyage_is_closed(voy) and not is_arrival_report(noon.get("report_type")):
+                if noon.get("noon_id"):
+                    self.registry.mark_noon_processed(noon["noon_id"])
+                state.note(
+                    self.name,
+                    f"{registry_key} skip noon — voyage already closed (eov={voy.get('eov_status')})",
+                )
+                return state
             master = voy["master_waypoints"]
             speed = float(noon.get("avg_speed_kn") or voy["cp_speed_kn"])
             start = _utc_now()
@@ -426,26 +469,50 @@ class NoonOpsAgent(Agent):
             )
 
             # Arrival → EOV in background (does not block noon route alts or daemon poll)
-            if settings.eov_on_arrival and is_arrival_report(noon.get("report_type")):
+            arrival = is_arrival_report(noon.get("report_type"))
+            if settings.eov_on_arrival and arrival:
                 _schedule_eov(self.backend, self.registry, registry_key)
                 state.note(self.name, f"{registry_key} arrival → EOV queued (background)")
 
-            # On noon + weather: recompute 4 alternate routes from ship position + remaining WPs
-            try:
-                opt_agent = PreVoyageRouteOptimizeAgent(self.backend, self.registry)
-                state = opt_agent.run(
-                    state,
-                    voyage_number=registry_key,
-                    waypoints=remaining,
-                    speed_kn=speed,
-                    trigger="noon",
-                )
-            except Exception as e:
-                state.note(self.name, f"{registry_key} noon route alts failed: {e}")
+            # Route-opt is a separate service — drop a job file, do not wait.
+            nid = noon.get("noon_id") or "latest"
+            remaining_wps = remaining
+            speed_kn = speed
+            voy = registry_key
+            if arrival or voyage_is_closed(self.registry.get(voy)):
+                state.note(self.name, f"{voy} skip noon route-opt — voyage closing/closed")
+            elif enqueue_route_opt:
+                from vpm_agents.tools import job_bus
+
+                key = f"routeopt:{voy}:noon:{nid}"
+                if job_bus.enqueue(
+                    key,
+                    {
+                        "kind": "routeopt",
+                        "voyage_number": voy,
+                        "trigger": "noon",
+                        "noon_id": nid,
+                        "speed_kn": speed_kn,
+                        "waypoints": remaining_wps,
+                    },
+                ):
+                    state.note(self.name, f"{voy} noon route alts queued")
+            else:
+                try:
+                    opt_agent = PreVoyageRouteOptimizeAgent(self.backend, self.registry)
+                    state = opt_agent.run(
+                        state,
+                        voyage_number=voy,
+                        waypoints=remaining_wps,
+                        speed_kn=speed_kn,
+                        trigger="noon",
+                    )
+                except Exception as e:
+                    state.note(self.name, f"{voy} noon route alts failed: {e}")
 
             if path and Path(path).exists():
                 try:
-                    archive_inbox_file(path, "processed")
+                    archive_inbox_file(path)
                 except Exception:
                     pass
         except Exception as e:
@@ -562,25 +629,70 @@ class NoonExcelWatchAgent(Agent):
         self.noon_agent = noon_agent or NoonOpsAgent(backend, self.registry)
         super().__init__(backend)
 
-    def run(self, state: SessionState) -> SessionState:
+    def _process_row(self, row: dict[str, Any]) -> SessionState:
+        state = SessionState()
+        payload = {k: v for k, v in row.items() if k != "_drop_path"}
+        state.note(self.name, f"noon row {payload.get('noon_id')} voy={payload.get('voyage_number')}")
+        state = self.noon_agent.run(state, noon=payload, enqueue_route_opt=True)
+        from vpm_agents.tools.noon_source import archive_finished_drops
+
+        archive_finished_drops([row], self.registry)
+        return state
+
+    def run(self, state: SessionState, *, enqueue: bool = False) -> SessionState:
+        from vpm_agents.tools.noon_io import sort_noon_rows
+
         sources = get_noon_sources()
-        drop_rows: list[dict] = []
-        drip_rows: list[dict] = []
+        rows: list[dict] = []
         for src in sources:
-            fetched = src.fetch_new(self.registry)
-            if isinstance(src, FolderNoonSource):
-                drop_rows.extend(fetched)
-            else:
-                drip_rows.extend(fetched[: max(1, settings.noon_batch_size)])
-        rows = drop_rows + drip_rows
+            rows.extend(src.fetch_new(self.registry))
         if not rows:
             state.note(self.name, "no new noon rows", quiet=True)
             return state
-        for row in rows:
-            payload = {k: v for k, v in row.items() if k != "_drop_path"}
-            state.note(self.name, f"noon row {payload.get('noon_id')} voy={payload.get('voyage_number')}")
-            state = self.noon_agent.run(state, noon=payload)
-        archive_finished_drops(drop_rows, self.registry)
+
+        # One row at a time, oldest observed_at first — do not skip ahead of a held row.
+        row = sort_noon_rows(rows)[0]
+        voy = row.get("voyage_number") or "?"
+        rec, _ = self.registry.find_voyage(voy)
+        if not rec:
+            state.note(
+                self.name,
+                f"holding noon row {row.get('noon_id')} voy={voy} until pre-voyage ingested",
+            )
+            state.phase = self.spec.get("phase", "noon_excel_polled")
+            return state
+
+        from vpm_agents.tools import job_bus
+
+        rec_key = compact_voyage_number(voy)
+        if job_bus.has_open(f"routeopt:{rec_key}:"):
+            state.note(
+                self.name,
+                f"{rec_key} waiting — previous route-opt still pending/running",
+                quiet=True,
+            )
+            state.phase = self.spec.get("phase", "noon_excel_polled")
+            return state
+
+        if enqueue:
+            from vpm_agents.tools.daemon_jobs import LANE_INGEST, lane_has_prefix, submit_job
+
+            if lane_has_prefix(LANE_INGEST, "noon:"):
+                state.note(self.name, "noon ingest busy — waiting for previous row", quiet=True)
+                state.phase = self.spec.get("phase", "noon_excel_polled")
+                return state
+            nid = row.get("noon_id") or f"{row.get('voyage_number')}:{row.get('observed_at')}"
+            key = f"noon:{nid}"
+            fut = submit_job(key, lambda r=row: self._process_row(r), lane=LANE_INGEST)
+            if fut is not None:
+                state.note(self.name, f"queued {key}")
+            state.phase = self.spec.get("phase", "noon_excel_polled")
+            return state
+
+        payload = {k: v for k, v in row.items() if k != "_drop_path"}
+        state.note(self.name, f"noon row {payload.get('noon_id')} voy={payload.get('voyage_number')}")
+        state = self.noon_agent.run(state, noon=payload)
+        archive_finished_drops([row], self.registry)
         state.phase = self.spec.get("phase", "noon_excel_polled")
         return state
 
@@ -594,7 +706,56 @@ class WeatherReportAgent(Agent):
         super().__init__(backend)
         self.registry = registry or VoyageRegistry()
 
-    def run(self, state: SessionState) -> SessionState:
+    def _run_one(self, voy_no: str, rec: dict[str, Any]) -> SessionState:
+        state = SessionState()
+        t0 = time.monotonic()
+        plan_key = rec.get("weather_plan_key") or "six_hour_plan"
+        plan = rec.get(plan_key) or []
+        if not plan:
+            self.registry.upsert(voy_no, {"weather_due_at": None})
+            return state
+        try:
+            token = _auth_token(self.backend)
+            pts = [{"lat": p["lat"], "lon": p["lon"]} for p in plan]
+            wx = self.backend.weather_along_route(token, pts)
+            voyage_dir = settings.reports_out_dir / voy_no
+            voyage_dir.mkdir(parents=True, exist_ok=True)
+            combined_path = _write_combined(
+                voyage_dir, voy_no, plan, wx, vessel_name=rec.get("vessel_name", ""), prefix="voyage_track_weather"
+            )
+            track = json.loads(combined_path.read_text())
+            if settings.weather_report_on_prevoyage:
+                weather_txt, weather_json = write_weather_report(
+                    voy_no,
+                    track,
+                    voyage_rec=rec,
+                    vessel_id=rec.get("vessel_id", ""),
+                    vessel_name=rec.get("vessel_name", ""),
+                    plan_label="6-hour pre-voyage plan",
+                    spec=self.spec,
+                )
+            else:
+                weather_txt = weather_json = None
+            self.registry.upsert(
+                voy_no,
+                {
+                    "weather_due_at": None,
+                    "last_voyage_track": str(combined_path),
+                    "last_weather_report": str(weather_txt) if weather_txt else rec.get("last_weather_report"),
+                    "last_bad_weather_json": str(weather_json) if weather_json else rec.get("last_bad_weather_json"),
+                },
+            )
+            state.note(
+                self.name,
+                f"{voy_no} track+wx → {combined_path}"
+                + (f" weather → {weather_txt}" if weather_txt else ""),
+                elapsed_s=time.monotonic() - t0,
+            )
+        except Exception as e:
+            state.note(self.name, f"{voy_no} weather failed: {e}", elapsed_s=time.monotonic() - t0)
+        return state
+
+    def run(self, state: SessionState, *, enqueue: bool = False) -> SessionState:
         now = _utc_now()
         due: list[tuple[str, dict]] = []
         for voy_no, rec in self.registry.all().items():
@@ -612,57 +773,26 @@ class WeatherReportAgent(Agent):
             return state
         state.note(self.name, f"due weather jobs={len(due)}")
 
+        if enqueue:
+            from vpm_agents.tools.daemon_jobs import submit_job
+
+            for voy_no, rec in due:
+                key = f"weather:{voy_no}"
+                fut = submit_job(key, lambda v=voy_no, r=rec: self._run_one(v, r), lane="heavy")
+                if fut is not None:
+                    state.note(self.name, f"queued {key}")
+            state.phase = self.spec.get("phase", "weather_reported")
+            return state
+
         try:
-            token = _auth_token(self.backend)
+            _auth_token(self.backend)
         except Exception as e:
             state.note(self.name, f"auth failed: {e}")
             return state
 
         for voy_no, rec in due:
-            t0 = time.monotonic()
-            plan_key = rec.get("weather_plan_key") or "six_hour_plan"
-            plan = rec.get(plan_key) or []
-            if not plan:
-                self.registry.upsert(voy_no, {"weather_due_at": None})
-                continue
-            try:
-                pts = [{"lat": p["lat"], "lon": p["lon"]} for p in plan]
-                wx = self.backend.weather_along_route(token, pts)
-                voyage_dir = settings.reports_out_dir / voy_no
-                voyage_dir.mkdir(parents=True, exist_ok=True)
-                combined_path = _write_combined(
-                    voyage_dir, voy_no, plan, wx, vessel_name=rec.get("vessel_name", ""), prefix="voyage_track_weather"
-                )
-                track = json.loads(combined_path.read_text())
-                if settings.weather_report_on_prevoyage:
-                    weather_txt, weather_json = write_weather_report(
-                        voy_no,
-                        track,
-                        voyage_rec=rec,
-                        vessel_id=rec.get("vessel_id", ""),
-                        vessel_name=rec.get("vessel_name", ""),
-                        plan_label="6-hour pre-voyage plan",
-                        spec=self.spec,
-                    )
-                else:
-                    weather_txt = weather_json = None
-                self.registry.upsert(
-                    voy_no,
-                    {
-                        "weather_due_at": None,
-                        "last_voyage_track": str(combined_path),
-                        "last_weather_report": str(weather_txt) if weather_txt else rec.get("last_weather_report"),
-                        "last_bad_weather_json": str(weather_json) if weather_json else rec.get("last_bad_weather_json"),
-                    },
-                )
-                state.note(
-                    self.name,
-                    f"{voy_no} track+wx → {combined_path}"
-                    + (f" weather → {weather_txt}" if weather_txt else ""),
-                    elapsed_s=time.monotonic() - t0,
-                )
-            except Exception as e:
-                state.note(self.name, f"{voy_no} weather failed: {e}", elapsed_s=time.monotonic() - t0)
+            st = self._run_one(voy_no, rec)
+            state.log.extend(st.log)
 
         state.phase = self.spec.get("phase", "weather_reported")
         return state
@@ -696,7 +826,7 @@ class PreVoyageRouteOptimizeAgent(Agent):
         if not master or len(master) < 2:
             return ToolResult(ok=False, error="need >=2 waypoints")
         token = _auth_token(self.backend)
-        storms = _fetch_active_storms(self.backend, token)
+        storms = last_storms()  # storm poller owns live fetch; we use last snapshot only
         spec = dict(self.spec.defaults)
         spec["full_voyage"] = trigger == "pre_voyage"
         result = optimize_route_alternatives(
@@ -731,10 +861,12 @@ class PreVoyageRouteOptimizeAgent(Agent):
         if not master or len(master) < 2:
             state.note(self.name, f"{voy_no} no route waypoints — skip")
             return state
+        snap_at = last_storms_fetched_at() or "none"
         state.note(
             self.name,
             f"{voy_no} [{trigger}] start — {len(master)} WPs method={settings.route_opt_method} "
-            f"algo={settings.route_opt_algo} (4 objectives; can take several minutes)",
+            f"algo={settings.route_opt_algo} storms={len(last_storms())} snapshot={snap_at} "
+            f"(4 objectives; can take several minutes)",
         )
         t0 = time.monotonic()
         try:
@@ -784,6 +916,14 @@ class PreVoyageRouteOptimizeAgent(Agent):
                     f"Suggested: {ctx['suggested_id']}\n\n" + ctx["alternatives_block"]
                 )
             txt_path = write_report(sub_dir, f"route_alternatives_{trigger}_{stamp}.txt", txt_body)
+            if trigger == "noon":
+                write_report(
+                    settings.reports_out_dir / voy_no,
+                    f"route_alternatives_{trigger}_{stamp}.txt",
+                    txt_body,
+                    email_pdf=True,
+                    voyage_number=voy_no,
+                )
 
             if trigger == "pre_voyage":
                 voyage_dir = settings.reports_out_dir / voy_no
@@ -809,13 +949,36 @@ class PreVoyageRouteOptimizeAgent(Agent):
                         + (cons_line + "\n" if cons_line else "")
                         + f"Suggested: {ctx['suggested_id']}\n\n{alt_block}\n"
                     )
+                map_path = None
+                try:
+                    from vpm_agents.tools.voyage_map import render_routes_map
+
+                    alt_pairs = [
+                        (r.get("label", rid), (r.get("route") or {}).get("waypoints") or [])
+                        for rid, r in sorted(routes.items())
+                    ]
+                    map_path = render_routes_map(
+                        rec.get("master_waypoints") or master,
+                        alt_pairs,
+                        voyage_dir / f"pre_voyage_routes_map_{stamp}.png",
+                        voyage_number=voy_no,
+                        labels=(
+                            rec.get("source_port") or "Departure",
+                            rec.get("dest_port") or "Arrival",
+                        ),
+                    )
+                except Exception as e:
+                    state.note(self.name, f"{voy_no} route map failed: {e}")
                 write_report(
                     voyage_dir,
                     f"pre_voyage_route_{stamp}.txt",
                     pv_body,
                     email_pdf=True,
                     voyage_number=voy_no,
+                    pdf_images=[map_path] if map_path else None,
                 )
+                if map_path:
+                    state.note(self.name, f"{voy_no} route map → {map_path.name}")
 
             suggested = routes.get(data.get("suggested_id") or "")
             sug_wps = suggested["route"]["waypoints"] if suggested else []
@@ -909,13 +1072,15 @@ class StormWatchAgent(Agent):
                 token = _auth_token(self.backend)
 
             storms = _fetch_active_storms(self.backend, token or "")
+            fetched_at = _utc_now().isoformat()
+            remember_storms(storms, fetched_at)  # share immediately; reports/email can lag
             state.storms = storms
             voyage_hits = assess_all_voyages(storms, self.registry.all())
 
             out = Path(settings.storm_out_dir)
             out.mkdir(parents=True, exist_ok=True)
             payload = {
-                "fetched_at": _utc_now().isoformat(),
+                "fetched_at": fetched_at,
                 "source": source,
                 "count": len(storms),
                 "storms": storms,
@@ -1022,24 +1187,56 @@ class InboxWatchAgent(Agent):
     def _list(self) -> ToolResult:
         return ToolResult(ok=True, data=[str(p) for p in list_inbox(settings.inbox_dir)])
 
-    def run(self, state: SessionState) -> SessionState:
+    def _dispatch_one(
+        self, kind: str, path: Path, *, enqueue_after_ingest: bool = False
+    ) -> SessionState:
+        state = SessionState()
+        state.note(self.name, f"seen {path.name} kind={kind}")
+        if kind == "pre_voyage":
+            from vpm_agents.core.flow_runner import PreVoyageFlowRunner
+
+            runner = PreVoyageFlowRunner(self.backend, self.registry, self.flow_name)
+            state = runner.run(state, path, enqueue_after_ingest=enqueue_after_ingest)
+        elif kind == "noon_report":
+            dest = relocate_inbox_file(path, incoming_dir(settings.noon_inbox_dir))
+            state.note(self.name, f"{path.name} is noon Excel → noon/incoming/")
+        else:
+            archive_inbox_file(path, "failed")
+        return state
+
+    def run(self, state: SessionState, *, enqueue: bool = False) -> SessionState:
         files = list_inbox(settings.inbox_dir)
         if not files:
             state.note(self.name, "inbox empty", quiet=True)
             return state
-        from vpm_agents.core.flow_runner import PreVoyageFlowRunner
 
         ordered = [(classify_inbox_file(p), p) for p in files]
         ordered.sort(key=lambda t: 0 if t[0] == "pre_voyage" else 1)
+
+        if enqueue:
+            from vpm_agents.tools.daemon_jobs import LANE_INGEST, submit_job
+
+            for kind, path in ordered:
+                if kind != "pre_voyage":
+                    st = self._dispatch_one(kind, path)
+                    state.log.extend(st.log)
+                    continue
+                key = f"inbox:{path.resolve()}"
+                fut = submit_job(
+                    key,
+                    lambda k=kind, p=path: self._dispatch_one(k, p, enqueue_after_ingest=True),
+                    lane=LANE_INGEST,
+                )
+                if fut is not None:
+                    state.note(self.name, f"queued {path.name} kind={kind}")
+            state.phase = self.spec.get("phase", "inbox_scanned")
+            return state
+
         for kind, path in ordered:
-            state.note(self.name, f"seen {path.name} kind={kind}")
-            if kind == "pre_voyage":
-                runner = PreVoyageFlowRunner(self.backend, self.registry, self.flow_name)
-                state = runner.run(state, path)
-            elif kind == "noon_report":
-                state.note(self.name, f"{path.name}: drop noon files in {settings.noon_inbox_dir}")
-                archive_inbox_file(path, "failed")
-            else:
-                archive_inbox_file(path, "failed")
+            st = self._dispatch_one(kind, path)
+            state.log.extend(st.log)
+            state.artifacts.update(st.artifacts)
+            if st.voyage_number:
+                state.voyage_number = st.voyage_number
         state.phase = self.spec.get("phase", "inbox_scanned")
         return state

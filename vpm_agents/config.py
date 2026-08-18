@@ -92,6 +92,10 @@ class Settings:
     reports_out_dir: Path = _path("VPM_REPORTS_OUT_DIR", ROOT / "reports")
     templates_dir: Path = _path("VPM_TEMPLATES_DIR", ROOT / "templates")
     registry_path: Path = _path("VPM_REGISTRY_PATH", ROOT / "data" / "voyage_registry.json")
+    # File job bus — ingest/noon drop work here; routeopt (and others) claim it
+    jobs_dir: Path = _path("VPM_JOBS_DIR", ROOT / "data" / "jobs")
+    # Tenant key for prevoyage_db jobs + DbNoonSource (must match PREVOYAGE_DB_TENANTS)
+    tenant: str = os.getenv("VPM_TENANT", "").strip().lower()
 
     inbox_poll_seconds: float = float(os.getenv("VPM_INBOX_POLL_SECONDS", "30"))
     storm_interval_hours: float = float(os.getenv("VPM_STORM_INTERVAL_HOURS", "6"))
@@ -101,8 +105,8 @@ class Settings:
         os.getenv("VPM_WEATHER_REPORT_DELAY_MINUTES", "0")
     )
 
-    # Noon report polling (Excel testing or DB later)
-    noon_source: str = os.getenv("VPM_NOON_SOURCE", "excel")  # excel | db
+    # Noon report polling (excel = drop folder; db = client std_enoonreporttable)
+    noon_source: str = os.getenv("VPM_NOON_SOURCE", "excel")  # excel | db | both
     noon_excel_path: Path = _path("VPM_NOON_EXCEL_PATH", ROOT / "samples" / "noon_reports.xlsx")
     noon_poll_seconds: float = float(os.getenv("VPM_NOON_POLL_SECONDS", "120"))
     noon_batch_size: int = int(os.getenv("VPM_NOON_BATCH_SIZE", "1"))
@@ -118,6 +122,10 @@ class Settings:
 
     # Tagged daemon flow (see agents/specs/DaemonFlows.md)
     daemon_flow: str = os.getenv("VPM_DAEMON_FLOW", "pre_voyage_weather")
+    # Heavy pool: route optimize, weather, storm (pollers stay independent)
+    daemon_workers: int = int(os.getenv("VPM_DAEMON_WORKERS", "4"))
+    # Ingest pool: inbox + noon pickup — separate so route-opt cannot starve ingest
+    daemon_ingest_workers: int = int(os.getenv("VPM_DAEMON_INGEST_WORKERS", "2"))
 
     # Weather reports — defaults to same tree as VPM_REPORTS_OUT_DIR/{voyage}/
     weather_out_dir: Path = _path(

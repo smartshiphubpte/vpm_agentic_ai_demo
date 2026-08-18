@@ -5,7 +5,7 @@ Supports:
   2) Real SSH Pre-Dep Voyage workbook (sheets: Vessel Details, Voyage Details,
      Waypoints List, CP Terms FWC)
 
-Drop pre-voyage files into VPM_INBOX_DIR. Noon files go in VPM_NOON_INBOX_DIR.
+Drop pre-voyage files into VPM_INBOX_DIR/incoming/. Noon → VPM_NOON_INBOX_DIR/incoming/.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from vpm_agents.tools.voyage_registry import normalize_voyage_number
+
+from vpm_agents.tools.folder_layout import FAILED, INCOMING, SENT, ensure_drop_dirs, incoming_dir
 
 MsgKind = Literal["pre_voyage", "noon_report", "unknown"]
 
@@ -91,7 +93,15 @@ def is_predep_workbook(path: Path) -> bool:
         sheets = _sheet_map(wb)
         if "waypoints" in sheets:
             return True
-        return _find_lat_lon_cols(wb.worksheets[0] if wb.worksheets else None)[0] is not None
+        ws = wb.worksheets[0] if wb.worksheets else None
+        if ws is None:
+            return False
+        # Combined noon Excel: Voyage_Number + Latitude columns — not a Pre-Dep form
+        header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None) or ()
+        cols = {_norm_header(str(h)) for h in header if h is not None}
+        if _kind_from_cols(cols) == "noon_report":
+            return False
+        return _find_lat_lon_cols(ws)[0] is not None
     finally:
         wb.close()
 
@@ -299,6 +309,12 @@ def parse_predep_workbook(path: Path) -> dict[str, Any]:
             "condition": "" if cond is None else str(cond).strip(),
             "etd": str(_pick(fields, "estimated departure time") or "").strip(),
             "eta": str(_pick(fields, "estimated arrival time") or "").strip(),
+            "displacement": _pick(fields, "displacement", numeric=True),
+            "cargo_weight": _pick(fields, "cargo weight", numeric=True),
+            "max_draft_on_departure": _pick(
+                fields, "max draft upon departure", "max draft on departure", numeric=True
+            ),
+            "voyage_priority": str(_pick(fields, "voyage priority") or "").strip(),
         }
     finally:
         wb.close()
@@ -333,34 +349,41 @@ def _read_table(path: Path) -> tuple[list[str], list[str]]:
     raise ValueError(f"unsupported inbox file type: {suffix}")
 
 
+def _kind_from_cols(cols: set[str]) -> MsgKind | None:
+    if "waypoints" in cols and "cp_speed_kn" in cols:
+        return "pre_voyage"
+    has_lat = bool(cols & {"lat", "latitude"})
+    has_lon = bool(cols & {"lon", "long", "lng", "longitude"})
+    if has_lat and has_lon and "voyage_number" in cols:
+        return "noon_report"
+    return None
+
+
 def classify_inbox_file(path: str | Path) -> MsgKind:
     path = Path(path)
     name_l = path.name.lower()
 
-    # Real Pre-Dep Voyage workbook
+    # Multi-sheet Pre-Dep first (waypoint sheet). Noon workbooks also have Lat/Long
+    # but usually no "waypoints" sheet — those must classify as noon_report.
     if _is_xlsx(path):
         try:
             if is_predep_workbook(path):
                 return "pre_voyage"
         except Exception:
             pass
-        if name_l.startswith("pre-dep") or "pre-dep voyage" in name_l or "pre_dep" in name_l:
-            # filename strongly suggests pre-voyage even if sheets renamed
-            try:
-                if is_predep_workbook(path):
-                    return "pre_voyage"
-            except Exception:
-                return "pre_voyage"  # let parse raise a clear error
 
     try:
         headers, _ = _read_table(path)
     except Exception:
-        return "unknown"
-    cols = set(headers)
-    if "waypoints" in cols and "cp_speed_kn" in cols:
-        return "pre_voyage"
-    if {"voyage_number", "lat", "lon"} <= cols:
-        return "noon_report"
+        headers = []
+    kind = _kind_from_cols(set(headers))
+    if kind:
+        return kind
+
+    if _is_xlsx(path) and (
+        name_l.startswith("pre-dep") or "pre-dep voyage" in name_l or "pre_dep" in name_l
+    ):
+        return "pre_voyage"  # let parse raise a clear error
     return "unknown"
 
 
@@ -441,25 +464,28 @@ def parse_noon_report(path: str | Path) -> dict[str, Any]:
 
 def list_inbox(inbox_dir: str | Path) -> list[Path]:
     inbox = Path(inbox_dir)
-    inbox.mkdir(parents=True, exist_ok=True)
-    (inbox / "processed").mkdir(exist_ok=True)
-    (inbox / "failed").mkdir(exist_ok=True)
+    ensure_drop_dirs(inbox)
+    drop = incoming_dir(inbox)
     return sorted(
         p
-        for p in inbox.iterdir()
+        for p in drop.iterdir()
         if p.is_file() and p.suffix.lower() in _INBOX_SUFFIXES and not p.name.startswith(".")
     )
 
 
-def archive_inbox_file(path: Path, dest_subdir: str = "processed") -> Path:
+def relocate_inbox_file(path: Path, dest_dir: str | Path) -> Path:
     path = Path(path)
-    dest_dir = path.parent / dest_subdir
+    dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / path.name
     if dest.exists():
         dest = dest_dir / f"{path.stem}_{path.stat().st_mtime_ns}{path.suffix}"
     shutil.move(str(path), str(dest))
     return dest
+
+
+def archive_inbox_file(path: Path, dest_subdir: str = SENT) -> Path:
+    return relocate_inbox_file(path, path.parent.parent / dest_subdir)
 
 
 if __name__ == "__main__":
@@ -473,4 +499,7 @@ if __name__ == "__main__":
     }
     assert _pick(mapping, "cp speed", numeric=True) == 10.7
     assert _pick(mapping, "cp consumption", numeric=True) is None
+    assert _kind_from_cols({"voyage_number", "latitude", "longitude"}) == "noon_report"
+    assert _kind_from_cols({"voyage_number", "lat", "lon"}) == "noon_report"
+    assert _kind_from_cols({"waypoints", "cp_speed_kn"}) == "pre_voyage"
     print("inbox_io self-check ok")

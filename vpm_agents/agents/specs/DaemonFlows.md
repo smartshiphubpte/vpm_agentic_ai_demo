@@ -14,6 +14,15 @@ noon Excel, storm watch). When an **Arrival** noon row is processed, End-of-Voya
 generation is queued on a **background thread** (`VPM_EOV_ON_ARRIVAL`) so inbox/noon polling
 continues for other voyages.
 
+**Parallelism:** each loop is its own process (Docker Compose) or poller thread (`run_daemon.py`).
+They share the voyage registry JSON, drop folders, storm snapshots, and a file job bus
+(`VPM_JOBS_DIR`). Ingest never waits for route-opt: it writes `weather_due_at` on the
+registry and a `routeopt:…` job file, then picks up the next Excel. StormWatchAgent
+**never joins the job queue** — it fetches on its timer; route-opt only reads the last
+snapshot (`storm_cache` / `storms_*.json`). Arrival noon still queues EOV on a background
+thread inside the noon service (`VPM_EOV_ON_ARRIVAL`). Closed voyages (`eov_status=done`
+or last noon was Arrival) are not route-optimized again.
+
 ## Flow tags
 
 | Tag | One-shot on pre-voyage Excel | Background (keeps running) |

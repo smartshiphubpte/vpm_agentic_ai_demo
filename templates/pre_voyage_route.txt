@@ -11,6 +11,10 @@ Generated: {generated_at}
 Fuel is omitted when CP consumption was not provided.
 {alternatives_block}
 
+## Route map (master + four alternatives)
+OSM.de basemap (same tiles as VoyagePM GUI). Master = blue; alternatives = coloured overlays.
+See map page in PDF.
+
 ## Waypoints (every 6 hours along master route)
 {waypoint_block}
 

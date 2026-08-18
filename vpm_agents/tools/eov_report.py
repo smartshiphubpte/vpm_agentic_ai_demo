@@ -405,7 +405,10 @@ def _write_eov_pdf(
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
 
-    path = out_dir / filename
+    from vpm_agents.tools.folder_layout import incoming_dir
+
+    path = incoming_dir(out_dir) / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
     pdf = FPDF(orientation="L", unit="mm", format="A4")
     pdf.set_margins(8, 8, 8)
     pdf.set_auto_page_break(auto=True, margin=8)
@@ -440,9 +443,6 @@ def _write_eov_pdf(
             pdf.cell(0, 5, f"(image failed: {e})", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.output(str(path))
-    from vpm_agents.tools.report_email import send_report_pdf
-
-    send_report_pdf(path, voyage_number=voyage_number)
     return path
 
 
