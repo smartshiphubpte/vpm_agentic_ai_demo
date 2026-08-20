@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from vpm_agents.config import settings
-from inbox_agent.parse import archive_inbox_file, list_inbox, parse_noon_report
 from vpm_agents.tools.folder_layout import SENT
 from vpm_agents.tools.noon_io import _float_or_none, noon_row_id, parse_dms_coordinate, parse_noon_excel
 from vpm_agents.tools.voyage_registry import VoyageRegistry, compact_voyage_number, voyage_is_closed
@@ -23,6 +22,8 @@ class NoonSource(ABC):
 
 def parse_noon_drop(path: str | Path) -> list[dict[str, Any]]:
     """One drop file → noon rows (combined Excel workbook or single-row CSV/xlsx)."""
+    from inbox_agent.parse import parse_noon_report
+
     path = Path(path)
     if path.suffix.lower() in {".xlsx", ".xlsm"}:
         rows = parse_noon_excel(path)
@@ -34,6 +35,8 @@ def parse_noon_drop(path: str | Path) -> list[dict[str, Any]]:
 
 
 def archive_finished_drops(rows: list[dict[str, Any]], registry: VoyageRegistry) -> None:
+    from inbox_agent.parse import archive_inbox_file
+
     seen: set[str] = set()
     for row in rows:
         raw = row.get(_DROP_PATH)
@@ -55,6 +58,8 @@ class FolderNoonSource(NoonSource):
         self.path = Path(path or settings.noon_inbox_dir)
 
     def fetch_new(self, registry: VoyageRegistry) -> list[dict[str, Any]]:
+        from inbox_agent.parse import archive_inbox_file, list_inbox
+
         out: list[dict[str, Any]] = []
         for f in list_inbox(self.path):
             try:

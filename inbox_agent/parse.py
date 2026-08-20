@@ -163,6 +163,15 @@ def _as_float(val: Any) -> float | None:
     return None
 
 
+def _sample_format_col(ws) -> int | None:
+    """Column index of the 'Sample format' header (template values, never ingest)."""
+    for row in ws.iter_rows(min_row=1, max_row=_row_cap(ws, 20), max_col=12, values_only=True):
+        for i, c in enumerate(row):
+            if c is not None and _norm_label(c) == "sample format":
+                return i
+    return None
+
+
 def _is_field_label(cell: Any) -> bool:
     if cell is None or not isinstance(cell, str):
         return False
@@ -175,8 +184,13 @@ def _is_field_label(cell: Any) -> bool:
 
 
 def _sheet_fields(ws) -> dict[str, list[Any]]:
-    """Label → values to the right. Works for col-C labels or any leading field name."""
+    """Label → values to the right. Works for col-C labels or any leading field name.
+
+    The Pre-Dep template puts real values next to the label and a 'Sample format'
+    column further right; that column is ignored.
+    """
     found: dict[str, list[Any]] = {}
+    sample_col = _sample_format_col(ws)
     max_row = _row_cap(ws, 80)
     for row in ws.iter_rows(min_row=1, max_row=max_row, max_col=12, values_only=True):
         cells = list(row)
@@ -186,7 +200,14 @@ def _sheet_fields(ws) -> dict[str, list[Any]]:
                 label_i = i
         if label_i is None:
             continue
-        rest = [c for c in cells[label_i + 1 :] if c is not None and str(c).strip() != ""]
+        rest: list[Any] = []
+        for i, c in enumerate(cells):
+            if i <= label_i:
+                continue
+            if sample_col is not None and i == sample_col:
+                continue
+            if c is not None and str(c).strip() != "":
+                rest.append(c)
         if not rest:
             continue
         found.setdefault(_norm_label(cells[label_i]), rest)
@@ -805,8 +826,18 @@ if __name__ == "__main__":
     assert _pick(mapping, "cp consumption", numeric=True) == 25
     spd, spd_err = _numeric_or_issue(mapping, "CP Speed (knots)", "cp speed")
     assert spd == 10.7 and spd_err is None
-    _, bad_spd = _numeric_or_issue({"cp speed in kts": ["Ballast", "Laden"]}, "CP Speed (knots)", "cp speed")
-    assert bad_spd and "Ballast" in bad_spd and "cp speed in kts" in bad_spd
+    _, lol_err = _numeric_or_issue({"cp speed in kts/day": ["LOL"]}, "CP Speed (knots)", "cp speed")
+    assert lol_err and "LOL" in lol_err
+
+    class _SampleWs:
+        max_row = 8
+
+        def iter_rows(self, min_row=1, max_row=20, max_col=12, values_only=True):
+            yield (None, "Charter Party Info. For Voyage", None, None, None, None, "Sample format")
+            yield (None, None, "CP Speed in kts/day", "LOL", None, None, 12.5)
+
+    assert _sample_format_col(_SampleWs()) == 6
+    assert _sheet_fields(_SampleWs())["cp speed in kts/day"] == ["LOL"]
     assert _kind_from_cols({"voyage_number", "latitude", "longitude"}) == "noon_report"
     assert _kind_from_cols({"voyage_number", "lat", "lon"}) == "noon_report"
     assert _kind_from_cols({"waypoints", "cp_speed_kn"}) == "pre_voyage"

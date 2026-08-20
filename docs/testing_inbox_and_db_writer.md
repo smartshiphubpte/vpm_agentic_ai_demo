@@ -36,16 +36,60 @@ docker compose up --build ingest prevoyage-db
 
 ## Env files
 
-Two files. Postgres passwords stay in `prevoyage_db/.env` only.
+Two files. Postgres passwords stay in `prevoyage_db/.env` only. Copy the examples, then set **only** the keys below — leave weather / noon / storm / route-opt / LLM / report-sender vars empty.
 
 ```bash
 cp .env.example .env
 cp prevoyage_db/.env.example prevoyage_db/.env
 ```
 
-### Root `.env` (ingest)
+### Minimum set (folder drop → Postgres)
 
-Required for this slice:
+| File | Variable | Why |
+|------|----------|-----|
+| `.env` | `VPM_MODE=mock` | Ingest does not call `voyagepm_be` |
+| `.env` | `VPM_TENANT` | Tags the job (must match a tenant in `PREVOYAGE_DB_TENANTS`, lowercase) |
+| `.env` | `VPM_JOBS_DIR` | Shared job bus with the writer |
+| `.env` | `VPM_INBOX_DIR` | Folder watcher; drop files in `incoming/` |
+| `.env` | `VPM_REGISTRY_PATH` | Local voyage JSON |
+| `.env` | `VPM_REPORTS_OUT_DIR` | Ingest still writes pre-voyage txt/pdf |
+| `.env` | `VPM_TEMPLATES_DIR` | Template for that report (repo `templates/`) |
+| `.env` | `VPM_DAEMON_FLOW=noon_monitoring` | Do not enqueue weather / route-opt jobs |
+| `prevoyage_db/.env` | `VPM_JOBS_DIR` | **Same absolute path** as root `.env` |
+| `prevoyage_db/.env` | `PREVOYAGE_DB_TENANTS` | Comma list of tenant keys, e.g. `orion` |
+| `prevoyage_db/.env` | `PREVOYAGE_DB_<TENANT>_VPM_URL` | VoyagePM Postgres (`voyages` + `master_routes`) |
+| `prevoyage_db/.env` | `PREVOYAGE_DB_<TENANT>_CLIENT_URL` | Client Postgres (`ship` lookup) |
+
+`<TENANT>` in URL names is the tenant key **uppercased** (`orion` → `PREVOYAGE_DB_ORION_VPM_URL`).
+
+Do **not** set `VPM_EMAIL` / `VPM_PASSWORD` / `VPM_BASE_URL` for this slice — those are VoyagePM backend login, not the mailbox.
+
+### Also set for IMAP (optional)
+
+Folder drop works without these. IMAP is on only when both mailbox user and password are set (`VPM_MAIL_EMAIL` or `VPM_MAIL_IMAP_USER` + `VPM_MAIL_PASSWORD`).
+
+| File | Variable | Why |
+|------|----------|-----|
+| `.env` | `VPM_MAIL_EMAIL` | Mailbox address (iPowered: full address is the IMAP user) |
+| `.env` | `VPM_MAIL_PASSWORD` | Mailbox password |
+| `.env` | `VPM_MAIL_REJECT_TO` | Where invalid Pre-Dep mail is forwarded |
+| `.env` | `VPM_SMTP_HOST` | SMTP for that reject forward |
+| `.env` | `VPM_SMTP_PORT` | Default `587` |
+| `.env` | `VPM_SMTP_USER` | SMTP auth user |
+| `.env` | `VPM_SMTP_PASSWORD` | SMTP auth password |
+| `.env` | `VPM_SMTP_FROM` | From address on the reject mail |
+
+Optional IMAP overrides (only if autodetect is wrong): `VPM_MAIL_IMAP_HOST`, `VPM_MAIL_IMAP_PORT`, `VPM_MAIL_IMAP_SSL`, `VPM_MAIL_IMAP_FOLDER`, `VPM_MAIL_SUBJECT_CONTAINS`, `VPM_MAIL_POLL_SECONDS` (default `900`).
+
+### Defaults you can leave unset
+
+Writer uses these if omitted: `PREVOYAGE_DB_POLL_SECONDS=2`, `PREVOYAGE_DB_DRY_RUN=false`, `PREVOYAGE_DB_SSLMODE=prefer`, `PREVOYAGE_DB_CONNECT_TIMEOUT=45`, `PREVOYAGE_DB_CONNECT_RETRIES=4`, schemas `shipping_db`, tables `ship` / `voyages` / `master_routes`. Folder poll default is `VPM_INBOX_POLL_SECONDS=30`.
+
+First-pass dry run: `PREVOYAGE_DB_DRY_RUN=true` (maps + vessel lookup, no INSERT).
+
+If you later want ingest to talk to the running backend, set `VPM_MODE=live` plus `VPM_BASE_URL` / `VPM_EMAIL` / `VPM_PASSWORD` / `VPM_COMPANY`. Not needed for Excel → DB.
+
+### Root `.env` (ingest) — copy-paste
 
 ```bash
 # mock is enough — ingest does not hit voyagepm_be
@@ -72,7 +116,7 @@ VPM_DAEMON_FLOW=noon_monitoring
 
 VPM_INBOX_POLL_SECONDS=15
 
-# IMAP mailbox that receives Pre-Dep Excel (parsed in RAM; not saved to disk)
+# IMAP (omit all of these for folder-drop only)
 # iPowered: full address + mailbox password is enough
 VPM_MAIL_EMAIL=ops@yourcompany.com
 VPM_MAIL_PASSWORD=
@@ -87,11 +131,7 @@ VPM_SMTP_PASSWORD=
 VPM_SMTP_FROM=
 ```
 
-`VPM_EMAIL` / `VPM_PASSWORD` are VoyagePM backend login, not this mailbox. Leave them empty for this slice.
-
-If you later want ingest to talk to the running backend, set `VPM_MODE=live` plus `VPM_BASE_URL` / `VPM_EMAIL` / `VPM_PASSWORD` / `VPM_COMPANY`. Not needed for Excel → DB.
-
-### `prevoyage_db/.env` (writer)
+### `prevoyage_db/.env` (writer) — copy-paste
 
 `VPM_JOBS_DIR` here **must be the same path** as in root `.env`.
 
@@ -119,8 +159,6 @@ PREVOYAGE_DB_ORION_CLIENT_SCHEMA=shipping_db
 If the tenant key is not `orion`, change `PREVOYAGE_DB_TENANTS`, `VPM_TENANT`, and the `PREVOYAGE_DB_<TENANT>_VPM_URL` / `_CLIENT_URL` names (`PREVOYAGE_DB_ACME_VPM_URL`, …).
 
 Vessel lookup uses the **client** DB (`ship.name` / `mappingname` / `imo`). Voyage rows go to the **voyagepm** DB. The vessel name in the Excel must exist in `shipping_db.ship` or the job fails.
-
-First-pass dry run: set `PREVOYAGE_DB_DRY_RUN=true` (maps + vessel lookup, no INSERT).
 
 ---
 
@@ -166,7 +204,7 @@ Writer log on start should include `tenants=orion` and `jobs=/var/vpm/jobs`. If 
 
 ### Email
 
-Enable IMAP as above. Send a Pre-Dep `.xlsx` to `VPM_MAIL_IMAP_USER`. Valid mail is queued for `prevoyage_db` (no copy in `incoming/`). Invalid mail is forwarded to `VPM_MAIL_REJECT_TO` with the missing fields listed; the original message is attached as `.eml`.
+Enable IMAP as above. Send a Pre-Dep `.xlsx` to `VPM_MAIL_EMAIL`. Valid mail is queued for `prevoyage_db` (no copy in `incoming/`). Invalid mail is forwarded to `VPM_MAIL_REJECT_TO` with the missing fields listed; the original message is attached as `.eml`.
 
 Gmail/Workspace: use an app password, IMAP enabled. Microsoft 365: IMAP must be allowed (or this poller will not see the mailbox).
 

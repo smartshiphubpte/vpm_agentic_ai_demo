@@ -19,9 +19,6 @@ from vpm_agents.tools.folder_layout import (
     voyage_report_dir,
     voyage_root,
 )
-from inbox_agent.parse import archive_inbox_file, parse_noon_report
-from vpm_agents.tools.noon_source import archive_finished_drops, get_noon_sources
-from vpm_agents.tools.noon_io import is_arrival_report, is_departure_report, voyage_has_departed
 from vpm_agents.tools.route_weather import build_voyage_track, format_track_block
 from vpm_agents.tools.storm_cache import last_storms, last_storms_fetched_at, remember_storms
 from vpm_agents.tools.storm_normalize import normalize_active_storms
@@ -264,6 +261,8 @@ class NoonOpsAgent(Agent):
         return [Tool("parse_noon", "Parse noon report file", self._parse)]
 
     def _parse(self, path: str) -> ToolResult:
+        from inbox_agent.parse import parse_noon_report
+
         return ToolResult(ok=True, data=parse_noon_report(path))
 
     def run(
@@ -276,6 +275,8 @@ class NoonOpsAgent(Agent):
     ) -> SessionState:
         if noon is None and path:
             try:
+                from inbox_agent.parse import parse_noon_report
+
                 noon = parse_noon_report(path)
             except Exception as e:
                 state.note(self.name, f"failed {Path(path).name}: {e}")
@@ -293,6 +294,8 @@ class NoonOpsAgent(Agent):
         *,
         enqueue_route_opt: bool = False,
     ) -> SessionState:
+        from vpm_agents.tools.noon_io import is_arrival_report, is_departure_report, voyage_has_departed
+
         try:
             voy, registry_key = self.registry.find_voyage(noon["voyage_number"])
             if not voy:
@@ -461,6 +464,8 @@ class NoonOpsAgent(Agent):
 
             if path and Path(path).exists():
                 try:
+                    from inbox_agent.parse import archive_inbox_file
+
                     archive_inbox_file(path)
                 except Exception:
                     pass
@@ -468,6 +473,8 @@ class NoonOpsAgent(Agent):
             state.note(self.name, f"failed: {e}")
             if path and Path(path).exists():
                 try:
+                    from inbox_agent.parse import archive_inbox_file
+
                     archive_inbox_file(path, "failed")
                 except Exception:
                     pass
@@ -590,6 +597,7 @@ class NoonExcelWatchAgent(Agent):
 
     def run(self, state: SessionState, *, enqueue: bool = False) -> SessionState:
         from vpm_agents.tools.noon_io import sort_noon_rows
+        from vpm_agents.tools.noon_source import get_noon_sources
 
         sources = get_noon_sources()
         rows: list[dict] = []
@@ -641,6 +649,8 @@ class NoonExcelWatchAgent(Agent):
         payload = {k: v for k, v in row.items() if k != "_drop_path"}
         state.note(self.name, f"noon row {payload.get('noon_id')} voy={payload.get('voyage_number')}")
         state = self.noon_agent.run(state, noon=payload)
+        from vpm_agents.tools.noon_source import archive_finished_drops
+
         archive_finished_drops([row], self.registry)
         state.phase = self.spec.get("phase", "noon_excel_polled")
         return state
@@ -658,6 +668,8 @@ class WeatherReportAgent(Agent):
     def _run_one(self, voy_no: str, rec: dict[str, Any]) -> SessionState:
         state = SessionState()
         t0 = time.monotonic()
+        from vpm_agents.tools.noon_io import voyage_has_departed
+
         if not voyage_has_departed(rec):
             self.registry.upsert(voy_no, {"weather_due_at": None})
             state.note(self.name, f"{voy_no} skip — voyage not departed yet")
@@ -722,6 +734,8 @@ class WeatherReportAgent(Agent):
 
     def run(self, state: SessionState, *, enqueue: bool = False) -> SessionState:
         now = _utc_now()
+        from vpm_agents.tools.noon_io import voyage_has_departed
+
         due: list[tuple[str, dict]] = []
         for voy_no, rec in self.registry.all().items():
             raw = rec.get("weather_due_at")

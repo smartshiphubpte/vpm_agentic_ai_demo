@@ -8,12 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from inbox_agent.parse import parse_dm_coordinate
 from vpm_agents.tools.voyage_registry import normalize_voyage_number
 
 
 def parse_dms_coordinate(text: str) -> float:
     """Parse 35°13'6''N, 12 39.812 N, or decimal."""
+    from inbox_agent.parse import parse_dm_coordinate
+
     return parse_dm_coordinate(text)
 
 
