@@ -38,7 +38,12 @@ def poll_folder_once() -> int:
     for pdf, base, ctx in _pending_pdfs():
         voy = ctx.get("voyage_number") or ""
         bucket = ctx.get("report_bucket") or base.name
-        if send_report_pdf(pdf, voyage_number=voy, report_bucket=bucket):
+        if send_report_pdf(
+            pdf,
+            voyage_number=voy,
+            vessel_id=ctx.get("vessel_id") or "",
+            report_bucket=bucket,
+        ):
             dest_dir = base / SENT
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest = dest_dir / pdf.name

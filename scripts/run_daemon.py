@@ -13,8 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from inbox_agent.watch import InboxWatchAgent, MailInboxAgent
 from vpm_agents.agents.continuous import (
-    InboxWatchAgent,
     NoonExcelWatchAgent,
     StormWatchAgent,
     WeatherReportAgent,
@@ -31,6 +31,7 @@ from vpm_agents.core.state import SessionState
 from vpm_agents.tools import get_backend
 from vpm_agents.tools.daemon_jobs import queue_stats
 from vpm_agents.tools.folder_layout import ensure_drop_dirs
+from vpm_agents.tools.voyage_registry import VoyageRegistry
 
 
 def _ensure_dirs() -> None:
@@ -92,12 +93,14 @@ def run_forever(flow_name: str | None = None) -> None:
     backend = get_backend()
     registry = VoyageRegistry()
     inbox_agent = InboxWatchAgent(backend, registry, flow_name=flow_name)
+    mail_agent = MailInboxAgent(backend, registry)
     noon_agent = NoonExcelWatchAgent(backend, registry)
     storm_agent = StormWatchAgent(backend, registry)
     weather_agent = WeatherReportAgent(backend, registry)
 
     storm_interval = max(1.0, settings.storm_interval_hours * 3600.0)
     inbox_poll = max(1.0, settings.inbox_poll_seconds)
+    mail_poll = max(1.0, settings.mail_poll_seconds)
     noon_poll = max(1.0, settings.noon_poll_seconds)
     weather_poll = flow_weather_poll(flow)
     # Delayed-weather poller cadence: same as inbox (cheap when nothing due)
@@ -112,6 +115,7 @@ def run_forever(flow_name: str | None = None) -> None:
         flush=True,
     )
     print(f"  inbox       = {settings.inbox_dir}", flush=True)
+    print(f"  mail poll   = {mail_poll}s IMAP", flush=True)
     print(f"  noon inbox  = {settings.noon_inbox_dir}", flush=True)
     print(f"  weather poll= {weather_poll} (delay {settings.weather_report_delay_minutes}m)", flush=True)
     print(f"  noon poll   = {flow.get('noon_poll', False)} (every {noon_poll}s)", flush=True)
@@ -143,6 +147,9 @@ def run_forever(flow_name: str | None = None) -> None:
     def _inbox_tick() -> None:
         inbox_agent.run(SessionState(), enqueue=True)
 
+    def _mail_tick() -> None:
+        mail_agent.run(SessionState())
+
     def _noon_tick() -> None:
         noon_agent.run(SessionState(), enqueue=True)
 
@@ -163,6 +170,14 @@ def run_forever(flow_name: str | None = None) -> None:
             target=_poll_loop,
             args=("inbox", inbox_poll, stop, _inbox_tick),
             name="poll-inbox",
+            daemon=True,
+        )
+    )
+    threads.append(
+        threading.Thread(
+            target=_poll_loop,
+            args=("mail", mail_poll, stop, _mail_tick),
+            name="poll-mail",
             daemon=True,
         )
     )

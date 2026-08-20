@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from vpm_agents.config import settings
-from vpm_agents.tools.inbox_io import archive_inbox_file, list_inbox, parse_noon_report
+from inbox_agent.parse import archive_inbox_file, list_inbox, parse_noon_report
 from vpm_agents.tools.folder_layout import SENT
 from vpm_agents.tools.noon_io import _float_or_none, noon_row_id, parse_dms_coordinate, parse_noon_excel
 from vpm_agents.tools.voyage_registry import VoyageRegistry, compact_voyage_number, voyage_is_closed

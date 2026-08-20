@@ -12,4 +12,12 @@ Fuel is listed only when CP consumption (MT/day) was provided.
 
 {alternatives_block}
 
+## Alternate route waypoints (6-hour, all four)
+ #  Fastest / Shortest / Least fuel / Safest  (blank cell = route not published)
+{waypoint_table}
+
+## Route map (master + four alternatives)
+OSM.de basemap (same tiles as VoyagePM GUI). Master = blue; alternatives = coloured overlays with legend.
+See map page in PDF.
+
 — PreVoyageRouteOptimizeAgent

@@ -9,7 +9,7 @@ __pycache__/
 .git
 .cursor
 
-# Runtime data (mounted as volumes)
+# Runtime data (mounted as volumes). Python packages are inbox_agent/ noon_agent/ …
 data/
 inbox/
 noon_inbox/

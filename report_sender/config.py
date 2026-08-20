@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,6 +27,20 @@ _INBOX_DIRS = _parse_dirs(
     os.getenv("VPM_REPORT_SENDER_INBOX_DIR", ""),
     Path(os.getenv("VPM_REPORTS_OUT_DIR", "")).expanduser() if os.getenv("VPM_REPORTS_OUT_DIR", "").strip() else ROOT / "reports",
 )
+
+_TEMPLATES_DIR = Path(os.getenv("VPM_TEMPLATES_DIR", "")).expanduser() if os.getenv("VPM_TEMPLATES_DIR", "").strip() else ROOT / "templates"
+_REGISTRY_RAW = Path(os.getenv("VPM_REGISTRY_PATH", "")).expanduser() if os.getenv("VPM_REGISTRY_PATH", "").strip() else ROOT / "data" / "voyage_registry.json"
+
+
+def _email_templates() -> dict[str, str]:
+    return {
+        "passage_weather": os.getenv("VPM_REPORT_EMAIL_TEMPLATE_PASSAGE_WEATHER", "email_passage_weather.txt"),
+        "pre_departure": os.getenv("VPM_REPORT_EMAIL_TEMPLATE_PRE_DEPARTURE", "email_pre_departure.txt"),
+        "storm_alert": os.getenv("VPM_REPORT_EMAIL_TEMPLATE_STORM_ALERT", "email_storm_alert.txt"),
+        "end_of_voyage": os.getenv("VPM_REPORT_EMAIL_TEMPLATE_END_OF_VOYAGE", "email_end_of_voyage.txt"),
+        "port_weather": os.getenv("VPM_REPORT_EMAIL_TEMPLATE_PORT_WEATHER", "email_port_weather.txt"),
+        "generic": os.getenv("VPM_REPORT_EMAIL_TEMPLATE_GENERIC", "email_generic.txt"),
+    }
 
 
 @dataclass(frozen=True)
@@ -60,6 +74,12 @@ class Settings:
     voyage_email_table: str = os.getenv(
         "VPM_REPORT_SENDER_VOYAGE_EMAIL_TABLE", "vpm_voyage_email"
     )
+    voyage_schema: str = os.getenv("VPM_REPORT_SENDER_VOYAGE_SCHEMA", "shipping_db")
+    voyage_table: str = os.getenv("VPM_REPORT_SENDER_VOYAGE_TABLE", "voyages")
+
+    templates_dir: Path = _TEMPLATES_DIR
+    registry_path: Path = _REGISTRY_RAW
+    email_templates: dict[str, str] = field(default_factory=_email_templates)
 
 
 settings = Settings()

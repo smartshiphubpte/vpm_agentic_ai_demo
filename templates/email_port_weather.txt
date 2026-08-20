@@ -1,0 +1,11 @@
+Subject: Port Weather Report — {vessel_name} | Voyage {voyage_number}
+
+To: {recipients}
+
+Please find attached the port weather report for {vessel_name} (voyage {voyage_number}) at {port_name}.
+
+Generated: {timestamp}
+
+The PDF is attached for review.
+
+— VoyagePM

@@ -25,12 +25,20 @@ _SUBS = ("a", "b", "c")
 _UA = "VoyagePM-AgenticFramework/1.0 (EOV report map; contact voyage@smartshiphub.com)"
 
 # Master + four objective colours (match GUI-style contrast on OSM.de)
+_MASTER_COLOR = (11, 61, 145)
 _ALT_COLORS = (
     (230, 126, 34),
     (142, 68, 173),
     (39, 174, 96),
     (22, 160, 133),
 )
+_OBJECTIVE_COLORS = {
+    "fastest": (230, 126, 34),
+    "shortest": (142, 68, 173),
+    "fuel": (39, 174, 96),
+    "least fuel": (39, 174, 96),
+    "safest": (22, 160, 133),
+}
 
 
 @dataclass(frozen=True)
@@ -86,14 +94,41 @@ def _pick_zoom(lats: list[float], lons: list[float], *, pad: float, max_tiles: i
     lat_max += lat_span * pad
     lon_min -= lon_span * pad
     lon_max += lon_span * pad
-    for z in range(7, 1, -1):
+    chosen = 2
+    for z in range(6, 1, -1):
         x0, y1 = _deg2num(lat_min, lon_min, z)
         x1, y0 = _deg2num(lat_max, lon_max, z)
         nx = abs(x1 - x0) + 1
         ny = abs(y1 - y0) + 1
         if nx * ny <= max_tiles:
-            return z
-    return 2
+            chosen = z
+            break
+    # one extra zoom-out so the full voyage sits inside the frame with margin
+    return max(2, chosen - 1)
+
+
+def _color_for_alt(label: str, i: int) -> tuple[int, int, int]:
+    s = (label or "").lower()
+    for key, color in _OBJECTIVE_COLORS.items():
+        if key in s:
+            return color
+    return _ALT_COLORS[i % len(_ALT_COLORS)]
+
+
+def _ui_font(size: int):
+    from PIL import ImageFont
+
+    for candidate in (
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+        Path("/usr/local/share/fonts/DejaVuSans.ttf"),
+    ):
+        if candidate.is_file():
+            try:
+                return ImageFont.truetype(str(candidate), size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
 
 
 def _fetch_tile(client: httpx.Client, z: int, x: int, y: int, i: int) -> bytes | None:
@@ -123,7 +158,7 @@ def _render_lines(
     if len(all_pts) < 2:
         return None
 
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
 
     lats = [p[0] for p in all_pts]
     lons = [p[1] for p in all_pts]
@@ -167,49 +202,50 @@ def _render_lines(
         return px, py
 
     draw = ImageDraw.Draw(canvas)
-    endpoint_pts: list[tuple[float, float]] = []
     for ln in lines:
         px_line = [to_px(lat, lon) for lat, lon in ln.points]
         if len(px_line) >= 2:
             draw.line(px_line, fill=ln.color, width=ln.width)
-        if ln.points:
-            endpoint_pts.extend([ln.points[0], ln.points[-1]])
 
     dep = lines[0].points[0] if lines and lines[0].points else all_pts[0]
     arr = lines[0].points[-1] if lines and lines[0].points else all_pts[-1]
     d_px = to_px(*dep)
     a_px = to_px(*arr)
-    r = 7
-    draw.ellipse((d_px[0] - r, d_px[1] - r, d_px[0] + r, d_px[1] + r), fill=(34, 139, 34))
-    draw.ellipse((a_px[0] - r, a_px[1] - r, a_px[0] + r, a_px[1] + r), fill=(200, 40, 40))
 
-    try:
-        font = ImageFont.load_default()
-    except Exception:
-        font = None
-
-    dep_lbl, arr_lbl = endpoint_labels or ("Departure", "Arrival")
-    head = title or f"Voyage routes{f' — {voyage_number}' if voyage_number else ''}"
-    draw.rectangle((8, 8, min(w - 8, 12 + 7 * len(head)), 28), fill=(255, 255, 255))
-    draw.text((12, 12), head, fill=(20, 20, 20), font=font)
-    draw.text((d_px[0] + 10, d_px[1] - 10), dep_lbl[:40], fill=(20, 90, 20), font=font)
-    draw.text((a_px[0] + 10, a_px[1] - 10), arr_lbl[:40], fill=(140, 20, 20), font=font)
-
-    # Legend — master + alternatives
-    legend_y = h - 8 - 14 * (len(lines) + 1)
-    legend_y = max(36, legend_y)
-    legend_h = 8 + 14 * len(lines)
-    draw.rectangle((8, legend_y, min(w - 8, 320), legend_y + legend_h), fill=(255, 255, 255))
-    for i, ln in enumerate(lines):
-        y = legend_y + 6 + i * 14
-        draw.line((16, y + 6, 36, y + 6), fill=ln.color, width=max(2, ln.width // 2))
-        draw.text((42, y), ln.label[:36], fill=(20, 20, 20), font=font)
-
-    # ponytail: cap huge mosaic size for email/PDF embed
+    # ponytail: cap huge mosaic; draw labels after resize so legend stays readable
     max_w = 2400
+    ratio = 1.0
     if w > max_w:
         ratio = max_w / w
         canvas = canvas.resize((max_w, int(h * ratio)), Image.Resampling.LANCZOS)
+        d_px = (int(d_px[0] * ratio), int(d_px[1] * ratio))
+        a_px = (int(a_px[0] * ratio), int(a_px[1] * ratio))
+        w, h = canvas.size
+
+    draw = ImageDraw.Draw(canvas)
+    font = _ui_font(14)
+    small = _ui_font(12)
+    r = max(6, int(7 * ratio))
+    draw.ellipse((d_px[0] - r, d_px[1] - r, d_px[0] + r, d_px[1] + r), fill=(34, 139, 34))
+    draw.ellipse((a_px[0] - r, a_px[1] - r, a_px[0] + r, a_px[1] + r), fill=(200, 40, 40))
+
+    dep_lbl, arr_lbl = endpoint_labels or ("Departure", "Arrival")
+    head = title or f"Voyage routes{f' — {voyage_number}' if voyage_number else ''}"
+    title_w = min(w - 16, max(220, 10 + 8 * len(head)))
+    draw.rectangle((8, 8, 8 + title_w, 30), fill=(255, 255, 255), outline=(80, 80, 80))
+    draw.text((12, 11), head, fill=(20, 20, 20), font=font)
+    draw.text((d_px[0] + 10, d_px[1] - 14), dep_lbl[:40], fill=(20, 90, 20), font=small)
+    draw.text((a_px[0] + 10, a_px[1] - 14), arr_lbl[:40], fill=(140, 20, 20), font=small)
+
+    row_h = 18
+    legend_h = 10 + row_h * len(lines)
+    legend_w = min(w - 16, 280)
+    legend_y = 36
+    draw.rectangle((8, legend_y, 8 + legend_w, legend_y + legend_h), fill=(255, 255, 255), outline=(80, 80, 80))
+    for i, ln in enumerate(lines):
+        y = legend_y + 6 + i * row_h
+        draw.rectangle((16, y + 3, 40, y + 13), fill=ln.color)
+        draw.text((48, y), (ln.label or f"Route {i + 1}")[:36], fill=(20, 20, 20), font=small)
 
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -234,7 +270,7 @@ def render_voyage_map(
     if len(pts) < 2:
         return None
     return _render_lines(
-        [_MapLine(pts, (11, 61, 145), 4, "Master route")],
+        [_MapLine(pts, _MASTER_COLOR, 4, "Master route")],
         Path(dest),
         voyage_number=voyage_number,
         endpoint_labels=labels,
@@ -250,17 +286,17 @@ def render_routes_map(
     *,
     voyage_number: str = "",
     labels: tuple[str, str] | None = None,
+    title: str | None = None,
 ) -> Path | None:
     """Master + alternative routes on one OSM.de map (full voyage visible)."""
     lines: list[_MapLine] = []
+    master_pts = _points_from_raw(master)
+    if len(master_pts) >= 2:
+        lines.append(_MapLine(master_pts, _MASTER_COLOR, 5, "Master route"))
     for i, (label, wps) in enumerate(alternatives):
         pts = _points_from_raw(wps)
         if len(pts) >= 2:
-            color = _ALT_COLORS[i % len(_ALT_COLORS)]
-            lines.append(_MapLine(pts, color, 3, label or f"Alt {i + 1}"))
-    master_pts = _points_from_raw(master)
-    if len(master_pts) >= 2:
-        lines.append(_MapLine(master_pts, (11, 61, 145), 5, "Master route"))
+            lines.append(_MapLine(pts, _color_for_alt(label, i), 3, label or f"Alt {i + 1}"))
     if len(lines) < 2:
         return render_voyage_map(
             [{"lat": lat, "lon": lon} for lat, lon in (master_pts or [])],
@@ -273,9 +309,9 @@ def render_routes_map(
         Path(dest),
         voyage_number=voyage_number,
         endpoint_labels=labels,
-        title=f"Pre-voyage routes{f' — {voyage_number}' if voyage_number else ''}",
-        pad=0.25,
-        max_tiles=80,
+        title=title or f"Route alternatives{f' — {voyage_number}' if voyage_number else ''}",
+        pad=0.4,
+        max_tiles=48,
     )
 
 
@@ -302,6 +338,8 @@ if __name__ == "__main__":
         ],
         [
             ("Fastest", [{"lat": 13.1, "lon": 100.8}, {"lat": 20.0, "lon": 108.0}, {"lat": 22.0, "lon": 113.5}]),
+            ("Shortest", [{"lat": 13.1, "lon": 100.8}, {"lat": 18.0, "lon": 109.0}, {"lat": 22.0, "lon": 113.5}]),
+            ("Least fuel", [{"lat": 13.1, "lon": 100.8}, {"lat": 17.0, "lon": 110.0}, {"lat": 22.0, "lon": 113.5}]),
             ("Safest", [{"lat": 13.1, "lon": 100.8}, {"lat": 16.0, "lon": 112.0}, {"lat": 22.0, "lon": 113.5}]),
         ],
         alt_out,

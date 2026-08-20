@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from vpm_agents.config import settings
-from vpm_agents.core.llm import chat
 from vpm_agents.tools.agent_log import progress
 from vpm_agents.tools.eov_compute import compute_eov_report, good_weather_filter
 from vpm_agents.tools.folder_layout import END_OF_VOYAGE_REPORT, voyage_report_dir
+from vpm_agents.tools.report_narrative import llm_section
+from vpm_agents.tools.templates import fill_template, write_text_pdf
 
 
 def _stamp() -> str:
@@ -27,16 +28,7 @@ def _fmt(n: Any, digits: int = 2) -> str:
 
 
 def _llm(system: str, user: str) -> str:
-    text = chat(
-        [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=0.3,
-    )
-    if text:
-        return text.strip()
-    return "(LLM unavailable — set GEMINI_API_KEY / OPENAI_API_KEY for narrative analysis.)"
+    return llm_section(system, user, "(LLM unavailable — set CURSOR_API_KEY for narrative analysis.)")
 
 
 def _eov_rows_from_registry(rec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -95,33 +87,19 @@ def resolve_eov_data(
     return compute_eov_report(rows, cp_speed=cp_speed, cp_cons=cp_cons, good_weather_reports=gw)
 
 
-def _section_cover(rec: dict, data: dict) -> str:
+def _cover_metrics(rec: dict, data: dict) -> dict[str, str]:
     vs = data.get("voyageSummary") or {}
     oa = data.get("overallAnalysis") or {}
-    vessel = rec.get("vessel_name") or rec.get("vessel_id") or "—"
-    src = rec.get("source_port") or "—"
-    dst = rec.get("dest_port") or "—"
-    voy = rec.get("voyage_number") or "—"
-    cond = rec.get("condition") or "—"
-    return "\n".join(
-        [
-            "SMARTSHIPHUB — Voyage Performance & Reporting",
-            "END OF VOYAGE REPORT",
-            f"{src} → {dst}",
-            "Prepared Basis: Budgeted Consumptions",
-            "",
-            f"Vessel: {vessel}",
-            f"Voyage No.: {voy}",
-            f"Condition: {cond}",
-            f"Departure: {src}",
-            f"Arrival: {dst}",
-            f"Distance sailed: {_fmt(oa.get('totalDistrun') or vs.get('totalDistRun'))} NM",
-            f"Time at sea: {_fmt(oa.get('totalSteamingTime') or vs.get('totalSteamingTime'))} hrs",
-            f"Average speed: {_fmt(oa.get('overallAvgSpeed') or vs.get('avgSpeed'))} kts",
-            f"Avg RPM: {_fmt(oa.get('totalAvgRpm') or vs.get('avgRPM'))}",
-            "",
-        ]
-    )
+    return {
+        "vessel_name": str(rec.get("vessel_name") or rec.get("vessel_id") or "—"),
+        "voyage_number": str(rec.get("voyage_number") or "—"),
+        "source_port": str(rec.get("source_port") or "—"),
+        "dest_port": str(rec.get("dest_port") or "—"),
+        "distance_nm": _fmt(oa.get("totalDistrun") or vs.get("totalDistRun")),
+        "time_hrs": _fmt(oa.get("totalSteamingTime") or vs.get("totalSteamingTime")),
+        "avg_speed_kn": _fmt(oa.get("overallAvgSpeed") or vs.get("avgSpeed")),
+        "avg_rpm": _fmt(oa.get("totalAvgRpm") or vs.get("avgRPM")),
+    }
 
 
 def _section_executive(rec: dict, data: dict) -> str:
@@ -177,17 +155,16 @@ def _section_bunker_narrative(data: dict) -> str:
     go_result = "NO FUEL CLAIM" if abs(go_over) < 0.05 else ("FUEL CLAIM" if go_over < 0 else "UNDER CONSUMPTION")
     table = "\n".join(
         [
-            "Time & Bunker Analysis",
-            f"CP Speed (kts): {_fmt(data.get('cpSpeed'))}",
-            f"Allowed Time En Route (hrs): {_fmt(ta.get('minAllowedTime'))} – {_fmt(ta.get('maxAllowedTime'))}",
-            f"Time result: {time_result}",
-            f"Daily CP FO Allowance (MT): {_fmt(data.get('cpCons'))}",
-            f"Actual FO (MT): {_fmt((data.get('overallAnalysis') or {}).get('FoCons'))}",
-            f"Allowed FO (MT): {_fmt(ba.get('minAllowableFOCons'))} – {_fmt(ba.get('maxAllowableFOCons'))}",
-            f"FO result: {fo_result}",
-            f"Actual MGO (MT): {_fmt((data.get('overallAnalysis') or {}).get('GoCons'))}",
-            f"Allowed MGO (MT): {_fmt(ba.get('minAllowableGOCons'))} – {_fmt(ba.get('maxAllowableGOCons'))}",
-            f"MGO result: {go_result}",
+            f"  CP Speed (kts): {_fmt(data.get('cpSpeed'))}",
+            f"  Allowed Time En Route (hrs): {_fmt(ta.get('minAllowedTime'))} – {_fmt(ta.get('maxAllowedTime'))}",
+            f"  Time result: {time_result}",
+            f"  Daily CP FO Allowance (MT): {_fmt(data.get('cpCons'))}",
+            f"  Actual FO (MT): {_fmt((data.get('overallAnalysis') or {}).get('FoCons'))}",
+            f"  Allowed FO (MT): {_fmt(ba.get('minAllowableFOCons'))} – {_fmt(ba.get('maxAllowableFOCons'))}",
+            f"  FO result: {fo_result}",
+            f"  Actual MGO (MT): {_fmt((data.get('overallAnalysis') or {}).get('GoCons'))}",
+            f"  Allowed MGO (MT): {_fmt(ba.get('minAllowableGOCons'))} – {_fmt(ba.get('maxAllowableGOCons'))}",
+            f"  MGO result: {go_result}",
         ]
     )
     note = _llm(
@@ -197,48 +174,61 @@ def _section_bunker_narrative(data: dict) -> str:
     return table + "\n\n" + note
 
 
-def _section_tables(data: dict) -> str:
-    lines = ["Noon Report Analysis", ""]
-    lines.append(
-        f"{'#':>3}  {'UTC':<20}  {'Type':<16}  {'Dist':>7}  {'Hrs':>6}  {'Spd':>6}  "
-        f"{'RPM':>6}  {'Slip':>6}  {'FO':>7}  {'MGO':>6}"
+def _overall_table(data: dict) -> str:
+    oa = data.get("overallAnalysis") or {}
+    gw = data.get("goodWeatherAnalysis") or {}
+    return "\n".join(
+        [
+            f"  {'Metric':<32}  {'Good Weather':>14}  {'Entire Voyage':>14}",
+            f"  {'Distance Sailed (NM)':<32}  {_fmt(gw.get('totalDistInGoodWeather')):>14}  {_fmt(oa.get('totalDistrun')):>14}",
+            f"  {'Time en Route (hrs)':<32}  {_fmt(gw.get('goodWeatherSteamingTime')):>14}  {_fmt(oa.get('totalSteamingTime')):>14}",
+            f"  {'Average Speed (kts)':<32}  {_fmt(gw.get('goodWeatherAvgSpeed')):>14}  {_fmt(oa.get('overallAvgSpeed')):>14}",
+            f"  {'Average Slip (%)':<32}  {_fmt(gw.get('goodWeatherAvgSlip')):>14}  {_fmt(oa.get('overallAvgSlip')):>14}",
+            f"  {'Average RPM':<32}  {_fmt(gw.get('goodWeatherAvgRPM')):>14}  {_fmt(oa.get('totalAvgRpm')):>14}",
+            f"  {'FO Consumption (MT)':<32}  {_fmt(gw.get('goodWeatherFoCons')):>14}  {_fmt(oa.get('FoCons')):>14}",
+            f"  {'MGO Consumption (MT)':<32}  {_fmt(gw.get('goodweatherGoCons')):>14}  {_fmt(oa.get('GoCons')):>14}",
+        ]
     )
+
+
+def _noon_table(data: dict) -> str:
+    lines = [
+        f"  {'#':>3}  {'UTC':<20}  {'Type':<16}  {'Dist':>7}  {'Hrs':>6}  {'Spd':>6}  "
+        f"{'RPM':>6}  {'Slip':>6}  {'FO':>7}  {'MGO':>6}"
+    ]
     for i, r in enumerate(data.get("perReportData") or [], 1):
         lines.append(
-            f"{i:3d}  {str(r.get('utcTime') or '—')[:20]:<20}  "
+            f"  {i:3d}  {str(r.get('utcTime') or '—')[:20]:<20}  "
             f"{str(r.get('reporttype') or '—')[:16]:<16}  "
             f"{_fmt(r.get('distance')):>7}  {_fmt(r.get('meRunningHrs')):>6}  "
             f"{_fmt(r.get('avgSpeed')):>6}  {_fmt(r.get('meRpm')):>6}  "
             f"{_fmt(r.get('slip')):>6}  {_fmt(r.get('foCons')):>7}  {_fmt(r.get('mgoCons')):>6}"
         )
+    return "\n".join(lines) if len(lines) > 1 else "  (no noon reports)"
 
-    oa = data.get("overallAnalysis") or {}
-    gw = data.get("goodWeatherAnalysis") or {}
-    lines += [
-        "",
-        "Overall Voyage Details (Good Weather vs Entire Voyage)",
-        f"{'Metric':<32}  {'Good Weather':>14}  {'Entire Voyage':>14}",
-        f"{'Distance Sailed (NM)':<32}  {_fmt(gw.get('totalDistInGoodWeather')):>14}  {_fmt(oa.get('totalDistrun')):>14}",
-        f"{'Time en Route (hrs)':<32}  {_fmt(gw.get('goodWeatherSteamingTime')):>14}  {_fmt(oa.get('totalSteamingTime')):>14}",
-        f"{'Average Speed (kts)':<32}  {_fmt(gw.get('goodWeatherAvgSpeed')):>14}  {_fmt(oa.get('overallAvgSpeed')):>14}",
-        f"{'Average Slip (%)':<32}  {_fmt(gw.get('goodWeatherAvgSlip')):>14}  {_fmt(oa.get('overallAvgSlip')):>14}",
-        f"{'Average RPM':<32}  {_fmt(gw.get('goodWeatherAvgRPM')):>14}  {_fmt(oa.get('totalAvgRpm')):>14}",
-        f"{'FO Consumption (MT)':<32}  {_fmt(gw.get('goodWeatherFoCons')):>14}  {_fmt(oa.get('FoCons')):>14}",
-        f"{'MGO Consumption (MT)':<32}  {_fmt(gw.get('goodweatherGoCons')):>14}  {_fmt(oa.get('GoCons')):>14}",
-    ]
 
-    lines += ["", "Good Weather Summary"]
-    gw_rows = [
+def _good_weather_block(data: dict) -> str:
+    rows = [
         r
         for r in (data.get("perReportData") or [])
-        if "noon" in str(r.get("reporttype") or "").lower()
+        if (float(r.get("windSpeed") or 0) <= 4 and float(r.get("seaHeight") or 0) <= 5)
+        and ("noon" in str(r.get("reporttype") or "").lower() or "arrival" in str(r.get("reporttype") or "").lower())
     ]
-    # Approximate: list noon rows that contributed to GW distance (same filter used upstream)
-    for i, r in enumerate(gw_rows, 1):
+    lines = [f"  Good-weather noons (BF ≤ 4 and sea ≤ 5 m): {len(rows)}"]
+    for i, r in enumerate(rows, 1):
         lines.append(
             f"  {i}. {r.get('utcTime')}  dist={_fmt(r.get('distance'))} NM  "
             f"FO={_fmt(r.get('foCons'))} MT  MGO={_fmt(r.get('mgoCons'))} MT"
         )
+    if not rows:
+        lines.append("  (none met the good-weather filter)")
+    note = llm_section(
+        "One short paragraph on good-weather-only performance vs the entire voyage. Plain text.",
+        {"goodWeatherAnalysis": data.get("goodWeatherAnalysis"), "overallAnalysis": data.get("overallAnalysis")},
+        "",
+    )
+    if note:
+        lines += ["", note]
     return "\n".join(lines)
 
 
@@ -247,21 +237,20 @@ def _section_formulations(data: dict) -> str:
     cons = _fmt(data.get("cpCons"))
     return "\n".join(
         [
-            "Formulations (Time & Bunker Analysis reference)",
-            f"Min. allowed CP speed (time gain): CP speed − 0.5 kn  (CP={cp})",
-            "Max. allowed CP speed (time loss): CP speed",
-            "Min. allowed time = total distance / CP speed",
-            "Max. allowed time = total distance / (CP speed − 0.5)",
-            f"Daily allowed CP consumption (MT): {cons}",
-            "Fuel tolerance: ±5% of (time at sea × daily CP cons / 24)  [default tenant]",
-            "If consumption inside min–max → no fuel claim; above max → fuel claim.",
+            f"  Min. allowed CP speed (time gain): CP speed − 0.5 kn  (CP={cp})",
+            "  Max. allowed CP speed (time loss): CP speed",
+            "  Min. allowed time = total distance / CP speed",
+            "  Max. allowed time = total distance / (CP speed − 0.5)",
+            f"  Daily allowed CP consumption (MT): {cons}",
+            "  Fuel tolerance: ±5% of (time at sea × daily CP cons / 24)  [default tenant]",
+            "  If consumption inside min–max → no fuel claim; above max → fuel claim.",
         ]
     )
 
 
 def _section_appendix(rec: dict) -> str:
     alerts = rec.get("eov_alerts") or rec.get("alerts") or []
-    lines = ["Appendix — System-issued alerts and advisories", ""]
+    lines = []
     if not alerts:
         lines.append("  (none recorded in registry for this voyage)")
         return "\n".join(lines)
@@ -394,59 +383,6 @@ def _fetch_voyage_map(
         return None
 
 
-def _write_eov_pdf(
-    out_dir: Path,
-    filename: str,
-    body: str,
-    images: list[Path],
-    *,
-    voyage_number: str,
-) -> Path:
-    """Landscape PDF: text body + embedded graph/map images, then email."""
-    from fpdf import FPDF
-    from fpdf.enums import XPos, YPos
-
-    from vpm_agents.tools.folder_layout import incoming_dir
-
-    path = incoming_dir(out_dir) / filename
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
-    pdf.set_margins(8, 8, 8)
-    pdf.set_auto_page_break(auto=True, margin=8)
-    pdf.add_page()
-
-    font = None
-    for candidate in (
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"),
-        Path("/usr/share/fonts/dejavu/DejaVuSansMono.ttf"),
-    ):
-        if candidate.is_file():
-            font = candidate
-            break
-    if font:
-        pdf.add_font("Mono", "", str(font))
-        pdf.set_font("Mono", size=7)
-    else:
-        pdf.set_font("Courier", size=7)
-
-    for line in body.splitlines():
-        pdf.cell(0, 3.5, line[:180], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    for img in images:
-        if not img.is_file():
-            continue
-        pdf.add_page()
-        pdf.set_font("Mono" if font else "Courier", size=9)
-        pdf.cell(0, 6, img.stem, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-        try:
-            pdf.image(str(img), w=270)
-        except Exception as e:
-            pdf.cell(0, 5, f"(image failed: {e})", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    pdf.output(str(path))
-    return path
-
-
 def build_end_of_voyage_report(
     *,
     backend: Any,
@@ -471,19 +407,21 @@ def build_end_of_voyage_report(
     assets = out_dir / "eov_assets"
     assets.mkdir(parents=True, exist_ok=True)
 
-    sections: dict[str, str] = {}
-    progress("EOVReport", f"{key} cover")
-    sections["cover"] = _section_cover(rec, data)
+    rec = {**rec, "voyage_number": rec.get("voyage_number") or key}
+    metrics = _cover_metrics(rec, data)
+    progress("EOVReport", f"{key} cover metrics")
     progress("EOVReport", f"{key} executive summary (LLM)")
-    sections["executive"] = _section_executive(rec, data)
-    progress("EOVReport", f"{key} overall narrative (LLM)")
-    sections["overall_narrative"] = _section_overall_narrative(rec, data)
+    executive = _section_executive(rec, data)
+    progress("EOVReport", f"{key} overall table + narrative (LLM)")
+    overall_table = _overall_table(data)
+    overall_narrative = _section_overall_narrative(rec, data)
     progress("EOVReport", f"{key} time & bunker (LLM)")
-    sections["bunker"] = _section_bunker_narrative(data)
-    progress("EOVReport", f"{key} tables")
-    sections["tables"] = _section_tables(data)
-    sections["formulations"] = _section_formulations(data)
-    sections["appendix"] = _section_appendix(rec)
+    bunker = _section_bunker_narrative(data)
+    progress("EOVReport", f"{key} noon + good-weather tables")
+    noon_table = _noon_table(data)
+    good_weather = _good_weather_block(data)
+    formulations = _section_formulations(data)
+    appendix = _section_appendix(rec)
 
     progress("EOVReport", f"{key} graphs")
     graphs = _plot_performance_curves(assets, data)
@@ -506,36 +444,27 @@ def build_end_of_voyage_report(
         dest_port=str(rec.get("dest_port") or "Arrival"),
     )
 
-    body = "\n\n".join(
-        [
-            sections["cover"],
-            "─" * 72,
-            "Executive Summary",
-            sections["executive"],
-            "─" * 72,
-            "Voyage Details",
-            f"Port rotation: {rec.get('source_port')} → {rec.get('dest_port')}",
-            sections["overall_narrative"],
-            "─" * 72,
-            sections["bunker"],
-            "─" * 72,
-            sections["tables"],
-            "─" * 72,
-            "Performance Curves",
-            "  (see attached chart pages)",
-            "─" * 72,
-            sections["formulations"],
-            "─" * 72,
-            sections["appendix"],
-        ]
-    )
-
     stamp = _stamp()
+    generated_at = datetime.now(timezone.utc).isoformat()
+    ctx = {
+        **metrics,
+        "generated_at": generated_at,
+        "executive_summary": executive,
+        "overall_table": overall_table,
+        "overall_narrative": overall_narrative,
+        "bunker_block": bunker,
+        "noon_table": noon_table,
+        "good_weather_block": good_weather,
+        "formulations_block": formulations,
+        "appendix_block": appendix,
+    }
+    body = fill_template("end_of_voyage_report.txt", ctx)
+
     txt_path = out_dir / f"end_of_voyage_report_{stamp}.txt"
     txt_path.write_text(body, encoding="utf-8")
     json_path = out_dir / f"end_of_voyage_report_{stamp}.json"
     json_path.write_text(
-        json.dumps({"voyage_number": key, "eov": data, "sections": list(sections)}, indent=2, default=str),
+        json.dumps({"voyage_number": key, "eov": data, "template_keys": list(ctx)}, indent=2, default=str),
         encoding="utf-8",
     )
 
@@ -543,8 +472,13 @@ def build_end_of_voyage_report(
     if map_path:
         images.insert(0, map_path)
     progress("EOVReport", f"{key} write PDF + email")
-    pdf_path = _write_eov_pdf(
-        out_dir, f"end_of_voyage_report_{stamp}.pdf", body, images, voyage_number=key
+    pdf_path = write_text_pdf(
+        out_dir,
+        f"end_of_voyage_report_{stamp}.pdf",
+        body,
+        voyage_number=key,
+        for_send=True,
+        images=images,
     )
 
     registry.upsert(
@@ -585,4 +519,27 @@ if __name__ == "__main__":
         cp_cons=24,
     )
     assert d["perReportData"]
+    from vpm_agents.tools.templates import fill_template as _ft
+
+    rec = {"vessel_name": "Test", "voyage_number": "V1", "source_port": "A", "dest_port": "B"}
+    metrics = _cover_metrics(rec, d)
+    body = _ft(
+        "end_of_voyage_report.txt",
+        {
+            **metrics,
+            "generated_at": "t",
+            "executive_summary": "exec",
+            "overall_table": _overall_table(d),
+            "overall_narrative": "narr",
+            "bunker_block": "bunker",
+            "noon_table": _noon_table(d),
+            "good_weather_block": "gw",
+            "formulations_block": _section_formulations(d),
+            "appendix_block": "(none)",
+        },
+    )
+    assert "END OF VOYAGE REPORT" in body
+    assert "COVER METRICS" in body
+    assert "EXECUTIVE SUMMARY" in body
+    assert "NOON REPORT ANALYSIS" in body
     print("eov_report self-check ok")

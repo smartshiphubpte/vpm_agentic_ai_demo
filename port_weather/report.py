@@ -10,6 +10,8 @@ from port_weather.config import settings
 from vpm_agents.config import settings as vpm_settings
 from vpm_agents.tools.folder_layout import PORT_WEATHER_REPORT, incoming_dir, voyage_report_dir
 from vpm_agents.tools.marine_units import format_latlon_dms
+from vpm_agents.tools.report_charts import weather_series_charts
+from vpm_agents.tools.report_narrative import compact_wx_facts, llm_section
 from vpm_agents.tools.templates import fill_template, write_text_pdf
 from vpm_agents.tools.weather_report import (
     extract_bad_weather_events,
@@ -114,6 +116,31 @@ def _window(rows: list[dict[str, Any]]) -> str:
     return f"{_fmt_dt(rows[0].get('date_utc'))} – {_fmt_dt(rows[-1].get('date_utc'))} UTC"
 
 
+def _port_narratives(
+    rows: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    port: str,
+) -> dict[str, str]:
+    facts = compact_wx_facts(rows, extra={"port": port, "bad_weather_events": events[:12], "event_count": len(events)})
+    return {
+        "summary_block": llm_section(
+            "Port Weather section 2.1 Summary. 3–5 bullets for a vessel alongside / at anchorage.",
+            facts,
+            _summary(rows, port),
+        ),
+        "outlook_block": llm_section(
+            "Section 3.1 Forecast outlook while in port. 2–4 bullets; cargo/mooring implications.",
+            facts,
+            _outlook(rows, events),
+        ),
+        "precautions_block": llm_section(
+            "Section 3.2 Precautions alongside / at anchorage. 3–6 actionable bullets.",
+            facts,
+            _precautions(events, rows),
+        ),
+    }
+
+
 def write_port_weather_report(
     *,
     voyage_number: str,
@@ -139,6 +166,8 @@ def write_port_weather_report(
     reports_root = Path(out_dir or vpm_settings.reports_out_dir)
     base = voyage_report_dir(reports_root, vessel_id, voyage_number, PORT_WEATHER_REPORT)
     incoming_dir(base)
+    narratives = _port_narratives(rows, events, port)
+    charts = weather_series_charts(base / "charts", rows, stem=f"port_{stamp}")
 
     ctx = {
         "voyage_number": voyage_number,
@@ -156,9 +185,9 @@ def write_port_weather_report(
         "interval_hours": settings.interval_hours,
         "forecast_table": format_passage_weather_table(rows),
         "highlight_note": "  * Highlighted rows: BF ≥ 5 and/or significant wave height ≥ 1.0 m",
-        "summary_block": _summary(rows, port),
-        "outlook_block": _outlook(rows, events),
-        "precautions_block": _precautions(events, rows),
+        "summary_block": narratives["summary_block"],
+        "outlook_block": narratives["outlook_block"],
+        "precautions_block": narratives["precautions_block"],
         "bad_weather_block": format_bad_weather_block(events),
         "event_count": len(events),
         "provider": track.get("provider") or "",
@@ -175,5 +204,6 @@ def write_port_weather_report(
         body,
         voyage_number=voyage_number,
         for_send=True,
+        images=charts,
     )
     return pdf_path, txt_path

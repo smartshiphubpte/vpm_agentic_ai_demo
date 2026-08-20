@@ -18,8 +18,8 @@ class PreVoyageFlowRunner:
     """Run one-shot pre-voyage chain for a flow tag; does not disable background agents."""
 
     def __init__(self, backend: Any, registry: Any, flow_name: str):
+        from inbox_agent.ingest import PreVoyageIngestAgent
         from vpm_agents.agents.continuous import (
-            PreVoyageIngestAgent,
             PreVoyageRouteOptimizeAgent,
             _run_immediate_weather,
         )

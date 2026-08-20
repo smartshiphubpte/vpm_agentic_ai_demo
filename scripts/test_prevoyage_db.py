@@ -53,7 +53,7 @@ def cmd_lookup(tenant_key: str, name: str) -> int:
 
 
 def cmd_dry_run(tenant_key: str, path: Path) -> int:
-    from vpm_agents.tools.inbox_io import parse_pre_voyage
+    from inbox_agent.parse import parse_pre_voyage
     from vpm_agents.tools.voyage_registry import normalize_voyage_number
 
     tenants = load_tenants()
@@ -69,7 +69,7 @@ def cmd_dry_run(tenant_key: str, path: Path) -> int:
 
 
 def cmd_enqueue(tenant_key: str, path: Path) -> int:
-    from vpm_agents.tools.inbox_io import parse_pre_voyage
+    from inbox_agent.parse import parse_pre_voyage
     from vpm_agents.tools import job_bus
     from vpm_agents.tools.voyage_registry import normalize_voyage_number
 

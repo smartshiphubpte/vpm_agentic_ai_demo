@@ -50,6 +50,9 @@ class Settings:
     voyages_table: str = os.getenv("PREVOYAGE_DB_VOYAGES_TABLE", "voyages")
     master_routes_table: str = os.getenv("PREVOYAGE_DB_MASTER_ROUTES_TABLE", "master_routes")
     noon_table: str = os.getenv("PREVOYAGE_DB_NOON_TABLE", "std_enoonreporttable")
+    suggested_routes_table: str = os.getenv(
+        "PREVOYAGE_DB_SUGGESTED_ROUTES_TABLE", "suggested_routes"
+    )
     noon_report_types: tuple[str, ...] = tuple(
         _csv(os.getenv(
             "PREVOYAGE_DB_NOON_REPORT_TYPES",
@@ -58,6 +61,9 @@ class Settings:
     )
 
     default_route_type: str = os.getenv("PREVOYAGE_DB_ROUTE_TYPE", "captainsRoute")
+    connect_timeout: int = int(os.getenv("PREVOYAGE_DB_CONNECT_TIMEOUT", "45"))
+    connect_retries: int = int(os.getenv("PREVOYAGE_DB_CONNECT_RETRIES", "4"))
+    transient_attempts: int = int(os.getenv("PREVOYAGE_DB_TRANSIENT_ATTEMPTS", "4"))
 
 
 def _tenant_keys() -> list[str]:

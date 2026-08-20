@@ -10,6 +10,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY vpm_agents ./vpm_agents
+COPY inbox_agent ./inbox_agent
+COPY noon_agent ./noon_agent
+COPY weather_agent ./weather_agent
+COPY routeopt_agent ./routeopt_agent
+COPY storm_agent ./storm_agent
 COPY report_sender ./report_sender
 COPY prevoyage_db ./prevoyage_db
 COPY port_weather ./port_weather

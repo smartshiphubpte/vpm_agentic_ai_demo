@@ -15,7 +15,7 @@ from vpm_agents.config import settings
 from vpm_agents.core.orchestrator import WORKFLOWS, SupervisorOrchestrator
 from vpm_agents.core.spec_loader import SPECS_DIR, load_agent_spec
 from vpm_agents.tools.geo import six_hour_waypoints
-from vpm_agents.tools.inbox_io import classify_inbox_file, parse_noon_report, parse_pre_voyage
+from inbox_agent.parse import classify_inbox_file, parse_noon_report, parse_pre_voyage
 from vpm_agents.tools.route_json import parse_route_points
 
 
@@ -261,16 +261,33 @@ def _continuous_cycle() -> None:
     )
     assert_true(load_agent_spec("RouteOptimizeLLMAgent").path.is_file(), "missing LLM route-opt spec")
     assert_true(load_agent_spec("PreVoyageRouteOptimizeAgent").path.is_file(), "missing pre-voyage opt spec")
+    for spec_name in (
+        "RouteOptFastestAgent",
+        "RouteOptShortestAgent",
+        "RouteOptFuelAgent",
+        "RouteOptSafestAgent",
+    ):
+        s = load_agent_spec(spec_name)
+        assert_true(s.path.is_file() and s.get("optimize_for"), f"missing/empty {spec_name}")
 
     pts = six_hour_waypoints([[1.0, 100.0], [2.0, 101.0]], 12.0, horizon_hours=12)
     assert_true(len(pts) >= 2, "six_hour_waypoints too short")
 
     from dataclasses import replace
 
-    g = replace(settings, llm_provider="gemini", gemini_api_key="k", openai_api_key="")
+    g = replace(settings, llm_provider="gemini", gemini_api_key="k", openai_api_key="", cursor_api_key="")
     assert_true(g.use_llm and g.llm_api_key == "k", "gemini llm_api_key")
     assert_true(g.llm_model.startswith("gemini"), "gemini llm_model default")
     assert_true(g.effective_llm_base_url.endswith("/openai"), "gemini base url")
+    c = replace(
+        settings,
+        llm_provider="cursor",
+        cursor_api_key="crsr_test",
+        openai_api_key="",
+        gemini_api_key="",
+    )
+    assert_true(c.effective_llm_provider == "cursor" and c.llm_api_key == "crsr_test", "cursor llm_api_key")
+    assert_true(c.llm_model == "composer-2.5" or bool(c.llm_model), "cursor llm_model")
 
     kind = classify_inbox_file(ROOT / "samples" / "inbox" / "pre_voyage.csv")
     assert_true(kind == "pre_voyage", f"bad classify {kind}")
@@ -278,7 +295,12 @@ def _continuous_cycle() -> None:
     assert_true(pv["cp_speed_kn"] == 12.5, "bad speed")
     assert_true(pv.get("cp_consumption_mt_day") is None, "sample CSV has no consumption")
 
-    from vpm_agents.tools.route_optimize import voyage_metrics, format_alternatives_block
+    from vpm_agents.tools.route_optimize import (
+        voyage_metrics,
+        format_alternatives_block,
+        format_alt_waypoint_table,
+        assign_routes_by_metric,
+    )
 
     m0 = voyage_metrics(240.0, 12.0, None)
     assert_true(m0["fuelMt"] is None and m0["days"] == 0.83, f"metrics skip fuel {m0}")
@@ -298,6 +320,65 @@ def _continuous_cycle() -> None:
     )
     assert_true("fuel consumption" not in blk, "must omit fuel when unknown")
     assert_true("distance: 240" in blk, "distance missing in report block")
+    tbl = format_alt_waypoint_table(
+        {
+            "fastest": {
+                "id": "fastest",
+                "label": "Fastest ETA",
+                "six_hour_plan": [{"lat": 1.25, "lon": 103.85}, {"lat": 5.0, "lon": 108.0}],
+            },
+            "safest": {
+                "id": "safest",
+                "label": "Safest",
+                "route": {"waypoints": [{"lat": 1.25, "lon": 103.85}]},
+            },
+        }
+    )
+    assert_true("Fastest ETA" in tbl and "Safest" in tbl, "alt waypoint table headers")
+    assert_true("1.2500" in tbl and "103.8500" in tbl, "alt waypoint table coords")
+    assert_true("Shortest" in tbl and "Least fuel" in tbl, "alt waypoint table keeps all four columns")
+
+    objs = [
+        {"id": "fastest", "optimize_for": "fastest", "label": "Fastest ETA"},
+        {"id": "shortest", "optimize_for": "shortest", "label": "Shortest distance"},
+        {"id": "fuel", "optimize_for": "fuel", "label": "Least fuel"},
+        {"id": "safest", "optimize_for": "safest", "label": "Safest (weather+storm)"},
+    ]
+    inverted = {
+        "fastest": {
+            "id": "fastest",
+            "voyage": {"distanceNm": 5558.3, "etaHours": 548.7, "fuelMt": 457.2},
+            "weather_score": {"weather_score": 90.0},
+            "storm_score": {"storm_clear": True},
+            "weather": {"points": [{"windKn": 11.7, "waveM": 2.7}]},
+        },
+        "shortest": {
+            "id": "shortest",
+            "voyage": {"distanceNm": 5311.0, "etaHours": 524.3, "fuelMt": 436.9},
+            "weather_score": {"weather_score": 90.0},
+            "storm_score": {"storm_clear": True},
+            "weather": {"points": [{"windKn": 11.5, "waveM": 2.6}]},
+        },
+        "fuel": {
+            "id": "fuel",
+            "voyage": {"distanceNm": 5428.1, "etaHours": 535.8, "fuelMt": 446.5},
+            "weather_score": {"weather_score": 90.0},
+            "storm_score": {"storm_clear": True},
+            "weather": {"points": [{"windKn": 11.0, "waveM": 2.7}]},
+        },
+        "safest": {
+            "id": "safest",
+            "voyage": {"distanceNm": 5188.7, "etaHours": 512.2, "fuelMt": 426.8},
+            "weather_score": {"weather_score": 80.0},
+            "storm_score": {"storm_clear": True},
+            "weather": {"points": [{"windKn": 27.6, "waveM": 4.0}]},
+        },
+    }
+    ranked = assign_routes_by_metric(inverted, objs)
+    assert_true(ranked["shortest"]["proposed_as"] == "safest", "shortest must take min NM")
+    assert_true(ranked["fastest"]["proposed_as"] == "safest", "fastest must take min ETA")
+    assert_true(ranked["fuel"]["proposed_as"] == "safest", "fuel must take min MT")
+    assert_true(ranked["safest"]["proposed_as"] != "safest", "safest must not keep the high-wind track")
     nr = parse_noon_report(ROOT / "samples" / "inbox" / "noon_report.csv")
     assert_true(nr["voyage_number"] == "VYG-2026-001", "bad noon voyage")
 
@@ -324,6 +405,7 @@ def main() -> None:
         "StormWatchAgent",
         "WeatherReportAgent",
         "InboxWatchAgent",
+        "MailInboxAgent",
         "EndOfVoyageReportAgent",
     ):
         assert_true(load_agent_spec(cont).path.is_file(), f"missing continuous spec {cont}")

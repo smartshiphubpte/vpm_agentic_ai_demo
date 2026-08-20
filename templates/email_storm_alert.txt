@@ -1,0 +1,12 @@
+Subject: Storm Weather Alert — {vessel_name} | Voyage {voyage_number}
+
+To: {recipients}
+
+A storm weather alert has been issued for {vessel_name} (voyage {voyage_number}).
+
+Route: {route_line}
+Generated: {timestamp}
+
+Please review the attached PDF and take appropriate precautions.
+
+— VoyagePM

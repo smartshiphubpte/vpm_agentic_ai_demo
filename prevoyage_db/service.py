@@ -4,11 +4,27 @@ from __future__ import annotations
 
 import signal
 import time
-from typing import Any
 
 from prevoyage_db.config import load_tenants, settings
 from prevoyage_db.log import log
-from prevoyage_db.writer import ingest_prevoyage
+from prevoyage_db.writer import ingest_prevoyage, ingest_suggested_routes
+
+_TRANSIENT = (
+    "timeout expired",
+    "connection timeout",
+    "could not connect",
+    "connection refused",
+    "server closed the connection",
+    "connection reset",
+    "network is unreachable",
+    "connection timed out",
+    "ssl syscall error",
+)
+
+
+def _transient_db(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return any(s in msg for s in _TRANSIENT)
 
 
 def drain_prevoyage_db_once() -> int:
@@ -19,7 +35,9 @@ def drain_prevoyage_db_once() -> int:
     if not tenants:
         return 0
 
-    job = job_bus.claim(kind="prevoyage_db", root=settings.jobs_dir)
+    job = job_bus.claim(kind="suggested_routes", root=settings.jobs_dir)
+    if not job:
+        job = job_bus.claim(kind="prevoyage_db", root=settings.jobs_dir)
     if not job:
         return 0
 
@@ -38,12 +56,26 @@ def drain_prevoyage_db_once() -> int:
 
     voy = record.get("voyage_number") or job.get("voyage_number") or "?"
     try:
-        result = ingest_prevoyage(tenant, record)
-        job_bus.complete(job, root=settings.jobs_dir)
-        log("done", f"{tenant_key} {voy} → voyage_id={result['voyage_id']}")
+        if job.get("kind") == "suggested_routes":
+            result = ingest_suggested_routes(tenant, record)
+            job_bus.complete(job, root=settings.jobs_dir)
+            log(
+                "done",
+                f"{tenant_key} {voy} suggested_routes → voyage_id={result.get('voyage_id')} "
+                f"ids={result.get('ids')} suggested={result.get('suggested_id')}",
+            )
+        else:
+            result = ingest_prevoyage(tenant, record)
+            job_bus.complete(job, root=settings.jobs_dir)
+            log("done", f"{tenant_key} {voy} → voyage_id={result['voyage_id']}")
     except Exception as e:
-        job_bus.fail(job, str(e), root=settings.jobs_dir)
-        log("fail", f"{tenant_key} {voy}: {e}")
+        if _transient_db(e) and job_bus.requeue(
+            job, str(e), root=settings.jobs_dir, max_attempts=settings.transient_attempts
+        ):
+            log("retry", f"{tenant_key} {voy}: {e}")
+        else:
+            job_bus.fail(job, str(e), root=settings.jobs_dir)
+            log("fail", f"{tenant_key} {voy}: {e}")
     return 1
 
 

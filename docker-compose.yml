@@ -34,6 +34,9 @@ x-vpm: &vpm
 services:
   ingest:
     <<: *vpm
+    env_file:
+      - .env
+      - prevoyage_db/.env
     command: ["python3", "scripts/run_service.py", "ingest"]
 
   noon:

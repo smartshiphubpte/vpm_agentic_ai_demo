@@ -108,6 +108,36 @@ def skip(job: dict[str, Any], reason: str, *, root: Path | None = None) -> None:
     _finish(job, "done", root=root)
 
 
+def requeue(
+    job: dict[str, Any],
+    reason: str,
+    *,
+    root: Path | None = None,
+    max_attempts: int = 4,
+) -> bool:
+    """Move a running job back to pending. fail() once attempts are spent. True if requeued."""
+    root = jobs_root(root)
+    job = dict(job)
+    attempts = int(job.get("attempts") or 0) + 1
+    job["attempts"] = attempts
+    job["last_error"] = reason
+    name = job.get("_file") or f"{_safe_name(str(job.get('key') or 'job'))}.json"
+    src = root / "running" / name
+    payload = {k: v for k, v in job.items() if k != "_file"}
+    payload.pop("claimed_at", None)
+    if attempts >= max(1, int(max_attempts)):
+        fail(job, reason, root=root)
+        return False
+    dest = root / "pending" / name
+    body = json.dumps(payload, indent=2, default=str)
+    if src.is_file():
+        src.write_text(body, encoding="utf-8")
+        src.replace(dest)
+    else:
+        dest.write_text(body, encoding="utf-8")
+    return True
+
+
 def _finish(job: dict[str, Any], bucket: str, *, root: Path | None = None) -> None:
     root = jobs_root(root)
     name = job.get("_file") or f"{_safe_name(str(job.get('key') or 'job'))}.json"
@@ -186,4 +216,14 @@ if __name__ == "__main__":
     assert stuck and (tmp / "running" / stuck["_file"]).is_file()
     assert reclaim_running(kind="routeopt", root=tmp) == 1
     assert (tmp / "pending" / stuck["_file"]).is_file()
+
+    enqueue("db:VTEST:timeout", {"kind": "suggested_routes"}, root=tmp)
+    flaky = claim(kind="suggested_routes", root=tmp)
+    assert flaky
+    assert requeue(flaky, "connection timeout expired", root=tmp, max_attempts=3)
+    assert (tmp / "pending" / flaky["_file"]).is_file()
+    again = claim(kind="suggested_routes", root=tmp)
+    assert again and again["attempts"] == 1
+    assert requeue(again, "connection timeout expired", root=tmp, max_attempts=2) is False
+    assert (tmp / "failed" / again["_file"]).is_file()
     print("job_bus self-check ok")

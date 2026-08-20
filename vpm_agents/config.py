@@ -74,7 +74,11 @@ class Settings:
         os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
         .rstrip("/")
     )
-    # openai | openai_compatible | gemini
+    cursor_api_key: str = os.getenv("CURSOR_API_KEY", "") or os.getenv("VPM_CURSOR_API_KEY", "")
+    cursor_model: str = os.getenv("CURSOR_MODEL", "").strip() or os.getenv("VPM_CURSOR_MODEL", "").strip() or "composer-2.5"
+    # local = cursor-sdk on this host; cloud = Cursor-hosted no-repo agent (better in Docker)
+    cursor_runtime: str = os.getenv("VPM_CURSOR_RUNTIME", "local").strip().lower()
+    # openai | openai_compatible | gemini | cursor
     llm_provider: str = os.getenv("VPM_LLM_PROVIDER", "openai")
     llm_base_url: str = os.getenv("VPM_LLM_BASE_URL", "").rstrip("/")
     # Live route optimize without voyagepm_be: conventional | llm | backend
@@ -98,6 +102,22 @@ class Settings:
     tenant: str = os.getenv("VPM_TENANT", "").strip().lower()
 
     inbox_poll_seconds: float = float(os.getenv("VPM_INBOX_POLL_SECONDS", "30"))
+    # IMAP mailbox — email + password is enough (iPowered defaults to imap.ipower.com).
+    mail_imap_host: str = os.getenv("VPM_MAIL_IMAP_HOST", "").strip()
+    mail_imap_port: int = int(os.getenv("VPM_MAIL_IMAP_PORT") or "993")
+    mail_imap_user: str = (
+        os.getenv("VPM_MAIL_IMAP_USER", "").strip()
+        or os.getenv("VPM_MAIL_EMAIL", "").strip()
+    )
+    mail_imap_password: str = os.getenv("VPM_MAIL_IMAP_PASSWORD", "") or os.getenv(
+        "VPM_MAIL_PASSWORD", ""
+    )
+    mail_imap_folder: str = os.getenv("VPM_MAIL_IMAP_FOLDER", "INBOX").strip() or "INBOX"
+    mail_imap_ssl: bool = os.getenv("VPM_MAIL_IMAP_SSL", "true").lower() in ("1", "true", "yes")
+    mail_reject_to: str = os.getenv("VPM_MAIL_REJECT_TO", "").strip()
+    mail_subject_contains: str = os.getenv("VPM_MAIL_SUBJECT_CONTAINS", "").strip()
+    # IMAP poll interval (seconds). Folder ingest still uses VPM_INBOX_POLL_SECONDS.
+    mail_poll_seconds: float = float(os.getenv("VPM_MAIL_POLL_SECONDS") or "900")
     storm_interval_hours: float = float(os.getenv("VPM_STORM_INTERVAL_HOURS", "6"))
     noon_horizon_hours: float = float(os.getenv("VPM_NOON_HORIZON_HOURS", str(7 * 24)))
     waypoint_interval_hours: float = float(os.getenv("VPM_WAYPOINT_INTERVAL_HOURS", "6"))
@@ -162,10 +182,14 @@ class Settings:
 
     @property
     def effective_llm_provider(self) -> str:
-        """Resolved provider — auto-routes Gemini-shaped keys off OpenAI."""
+        """Resolved provider — cursor/gemini take explicit provider; Gemini-shaped keys leave OpenAI."""
         p = (self.llm_provider or "openai").strip().lower()
+        if p in ("cursor", "cursor_sdk"):
+            return "cursor"
         if p == "gemini":
             return "gemini"
+        if self.cursor_api_key and not self.openai_api_key and not self.gemini_api_key:
+            return "cursor"
         if self.gemini_api_key and not self.openai_api_key:
             return "gemini"
         active = self.openai_api_key or self.gemini_api_key
@@ -175,12 +199,16 @@ class Settings:
 
     @property
     def llm_api_key(self) -> str:
+        if self.effective_llm_provider == "cursor":
+            return self.cursor_api_key
         if self.effective_llm_provider == "gemini":
             return self.gemini_api_key or self.openai_api_key
-        return self.openai_api_key or self.gemini_api_key
+        return self.openai_api_key or self.gemini_api_key or self.cursor_api_key
 
     @property
     def llm_model(self) -> str:
+        if self.effective_llm_provider == "cursor":
+            return self.cursor_model
         if self.effective_llm_provider == "gemini":
             return self.gemini_model
         return self.openai_model

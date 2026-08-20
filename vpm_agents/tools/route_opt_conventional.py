@@ -1,10 +1,8 @@
 """Local conventional route optimize: A*/Dijkstra on a sea-only graph.
 
 Hard rule: land is impassable (points and legs). Storms/weather are costs, not walls
-(safest tries storm keep-out first, then soft). Speed is fixed. Fuel cost is used
-only when CP consumption (MT/day) is provided; otherwise fuel ranks as distance.
-
-At fixed speed (and fixed MT/day) shortest ≈ fastest ≈ fuel; safest detours storms.
+(safest tries storm keep-out first, then soft). Shortest = NM; fastest = time with
+weather slowdown; fuel = burn with sea-state; safest = storm/weather over distance.
 """
 
 from __future__ import annotations
@@ -194,14 +192,16 @@ def _edge_cost(
     sog = max(_MIN_KTS, float(speed_kn) or _DEFAULT_SPEED_KN)
     hours = dist / sog
     obj = (objective or "shortest").lower()
-    if obj in ("shortest", "fastest"):
+    if obj == "shortest":
         return dist
+    if obj == "fastest":
+        # weather slows the ship — extra time beats extra NM
+        return hours * (1.0 + wx_f * 1.5)
     if obj in ("fuel", "lowest-fuel"):
-        if fuel_mt_day is not None:
-            return hours * float(fuel_mt_day)
-        return dist
-    # safest: distance + storm (and weather) — land never appears here
-    return dist + (storm * 2.5 if storm_soft else 0.0) + wx_f * dist * 0.4
+        rate = float(fuel_mt_day) if fuel_mt_day is not None else 1.0
+        return hours * rate * (1.0 + wx_f * 2.0)
+    # safest: distance is cheap vs storm/weather exposure
+    return dist * 0.35 + (storm * 3.0 if storm_soft else 0.0) + wx_f * dist * 2.0
 
 
 def _route_length_nm(master: list[dict[str, float]]) -> float:

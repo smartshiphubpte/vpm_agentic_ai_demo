@@ -69,6 +69,10 @@ def waypoints_to_geojson(
             lat, lon = float(wp["lat"]), float(wp["lon"])
         else:
             continue
+        if abs(lat) > 90.0 or abs(lon) > 180.0:
+            raise ValueError(
+                f"master route point {i + 1} is not decimal degrees (lat={lat}, lon={lon})"
+            )
         out.append(
             {
                 "type": "Feature",
@@ -148,6 +152,206 @@ def build_master_route_row(
     return row
 
 
+_VO_TYPE = {
+    "fastest": "fastest",
+    "shortest": "shortest",
+    "fuel": "lowest-fuel",
+    "lowest-fuel": "lowest-fuel",
+    "safest": "safest",
+}
+
+
+def vo_published_route_type(objective: str) -> str:
+    return _VO_TYPE.get((objective or "").strip().lower(), "safest")
+
+
+def _beaufort_from_kn(kn: float) -> int:
+    for i, cap in enumerate((1, 4, 7, 11, 17, 22, 28, 34, 41, 48, 56, 64)):
+        if kn < cap:
+            return i
+    return 12
+
+
+def _douglas(wave_m: float) -> int:
+    for i, cap in enumerate((0.1, 0.5, 1.25, 2.5, 4.0, 6.0, 9.0, 14.0)):
+        if wave_m < cap:
+            return i + 1
+    return 9
+
+
+def _iso_z(raw: Any) -> str:
+    dt = _parse_ts(raw)
+    if dt is None:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _eta_label(hours: float | None) -> str | None:
+    if hours is None:
+        return None
+    h = float(hours)
+    if h <= 0:
+        return None
+    rounded = round(h * 10) / 10
+    if rounded < 24:
+        return f"{rounded:.1f}h"
+    days = int(rounded // 24)
+    rem = round(rounded - days * 24, 1)
+    return f"{days}d" if rem <= 0 else f"{days}d {rem:.1f}h"
+
+
+def _arrival_eta_label(etd: Any, hours: float | None) -> str | None:
+    if hours is None:
+        return None
+    start = _parse_ts(etd)
+    if start is None:
+        return None
+    from datetime import timedelta
+
+    arr = start + timedelta(hours=float(hours))
+    return arr.astimezone(timezone.utc).strftime("%d %b %Y %H:%M UTC")
+
+
+def build_vo_comparison_metadata(
+    voyage: dict[str, Any],
+    weather_points: list[dict[str, Any]] | None,
+    *,
+    etd: Any = None,
+) -> dict[str, Any]:
+    """Same field names the GUI reads from voComparisonMetadata on the first WP."""
+    dist = voyage.get("distanceNm")
+    hours = voyage.get("etaHours")
+    fuel = voyage.get("fuelMt")
+    speed = voyage.get("speedKn")
+    winds, waves, swells, press = [], [], [], []
+    for p in weather_points or []:
+        if p.get("windKn") is not None:
+            winds.append(float(p["windKn"]))
+        if p.get("waveM") is not None:
+            waves.append(float(p["waveM"]))
+        if p.get("swellM") is not None:
+            swells.append(float(p["swellM"]))
+        if p.get("pressureHpa") is not None:
+            press.append(float(p["pressureHpa"]))
+    avg_w = sum(winds) / len(winds) if winds else None
+    avg_wv = sum(waves) / len(waves) if waves else None
+    avg_sw = sum(swells) / len(swells) if swells else None
+    avg_p = sum(press) / len(press) if press else None
+    dash = "—"
+    if avg_w is None and avg_wv is None and avg_sw is None and avg_p is None:
+        weather = None
+        safety, risk = None, None
+    else:
+        bf = _beaufort_from_kn(avg_w) if avg_w is not None else None
+        weather = {
+            "wind": str(bf) if bf is not None else dash,
+            "windSub": f"({avg_w:.1f} kts)" if avg_w is not None else dash,
+            "wave": f"{avg_wv:.2f} m" if avg_wv is not None else dash,
+            "seaState": f"Sea State {_douglas(avg_wv)}" if avg_wv is not None else dash,
+            "swell": f"{avg_sw:.2f} m" if avg_sw is not None else dash,
+            "pressure": str(int(round(avg_p))) if avg_p is not None else dash,
+            "pressureSub": "(avg along route)" if avg_p is not None else dash,
+        }
+        levels = []
+        if bf is not None:
+            levels.append("high" if bf > 6 else "moderate" if bf > 4 else "low")
+        if avg_wv is not None:
+            levels.append("high" if avg_wv >= 5 else "moderate" if avg_wv >= 4 else "low")
+        if avg_sw is not None:
+            levels.append("high" if avg_sw >= 4.5 else "moderate" if avg_sw >= 3.5 else "low")
+        if "high" in levels:
+            safety, risk = "Low", "High"
+        elif "moderate" in levels:
+            safety, risk = "Medium", "Moderate"
+        else:
+            safety, risk = "High", "Low"
+    meta: dict[str, Any] = {
+        "distanceLabel": f"{float(dist):.1f} NM" if dist is not None else None,
+        "etaLabel": _eta_label(float(hours) if hours is not None else None),
+        "arrivalEtaLabel": _arrival_eta_label(etd, float(hours) if hours is not None else None),
+        "speedLabel": f"{float(speed):.2f} kts" if speed else None,
+        "fuelLabel": f"{float(fuel):.1f}" if fuel is not None else None,
+        "weather": weather,
+        "safetyLabel": safety,
+        "riskLabel": risk,
+    }
+    return meta
+
+
+def suggested_route_geojson(
+    waypoints: list[Any],
+    *,
+    objective: str,
+    metadata: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """VO suggested_routes.route: Point features, [lon,lat], index/stoppage + publish props."""
+    out: list[dict[str, Any]] = []
+    vo_type = vo_published_route_type(objective)
+    for i, wp in enumerate(waypoints or []):
+        if isinstance(wp, (list, tuple)) and len(wp) >= 2:
+            lat, lon = float(wp[0]), float(wp[1])
+        elif isinstance(wp, dict) and wp.get("lat") is not None:
+            lat, lon = float(wp["lat"]), float(wp["lon"])
+        else:
+            continue
+        props: dict[str, Any] = {"index": i, "stoppage": 0}
+        if i == 0:
+            props["voPublishSource"] = "voyageOptimization"
+            props["voPublishedRouteType"] = vo_type
+            props["voComparisonMetadata"] = metadata
+        out.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": props,
+            }
+        )
+    return out
+
+
+def plan_to_int_route(
+    plan: list[dict[str, Any]],
+    *,
+    speed_kn: float,
+) -> list[dict[str, Any]]:
+    """VO suggested_routes.intRoute: 6h points with time/speed/bearing/distToGo."""
+    from vpm_agents.tools.geo import haversine_nm, initial_bearing_deg
+
+    pts: list[tuple[float, float, str]] = []
+    for p in plan or []:
+        if p.get("lat") is None or p.get("lon") is None:
+            continue
+        pts.append((float(p["lat"]), float(p["lon"]), str(p.get("eta_utc") or "")))
+    if not pts:
+        return []
+    remain = [0.0] * len(pts)
+    acc = 0.0
+    for i in range(len(pts) - 1, 0, -1):
+        acc += haversine_nm(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1])
+        remain[i - 1] = acc
+    out: list[dict[str, Any]] = []
+    for i, (lat, lon, eta) in enumerate(pts):
+        if i + 1 < len(pts):
+            brg = initial_bearing_deg(lat, lon, pts[i + 1][0], pts[i + 1][1])
+        elif i > 0:
+            brg = initial_bearing_deg(pts[i - 1][0], pts[i - 1][1], lat, lon)
+        else:
+            brg = 0.0
+        out.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {
+                    "time": _iso_z(eta) if eta else _iso_z(None),
+                    "speed": float(speed_kn),
+                    "bearing": brg,
+                    "distToGo": remain[i],
+                },
+            }
+        )
+    return out
+
+
 def json_dumps(value: Any) -> str:
     return json.dumps(value, default=str)
 
@@ -172,4 +376,23 @@ if __name__ == "__main__":
     assert voy["etd"].isoformat() == "2026-08-17T00:00:00+00:00"
     etd = _parse_ts("30-JUL-2026 1730LT (UTC+7)")
     assert etd is not None and etd.hour == 10 and etd.minute == 30 and etd.day == 30
+    meta = build_vo_comparison_metadata(
+        {"distanceNm": 100.0, "etaHours": 10.0, "fuelMt": 20.0, "speedKn": 10.0},
+        [{"windKn": 10.0, "waveM": 1.3, "swellM": 0.7, "pressureHpa": 1015}],
+        etd="2026-08-17T00:00:00+00:00",
+    )
+    assert meta["distanceLabel"] == "100.0 NM" and meta["fuelLabel"] == "20.0"
+    feats = suggested_route_geojson(
+        [{"lat": 1.0, "lon": 103.0}, {"lat": 2.0, "lon": 104.0}],
+        objective="fuel",
+        metadata=meta,
+    )
+    assert feats[0]["properties"]["voPublishedRouteType"] == "lowest-fuel"
+    assert feats[0]["geometry"]["coordinates"] == [103.0, 1.0]
+    intro = plan_to_int_route(
+        [{"lat": 1.0, "lon": 103.0, "eta_utc": "2026-08-17T00:00:00+00:00"},
+         {"lat": 2.0, "lon": 104.0, "eta_utc": "2026-08-17T06:00:00+00:00"}],
+        speed_kn=12.0,
+    )
+    assert intro[0]["properties"]["distToGo"] > 0 and "bearing" in intro[0]["properties"]
     print("prevoyage_db.mapper self-check ok")

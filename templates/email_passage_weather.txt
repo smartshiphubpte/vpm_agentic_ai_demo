@@ -1,0 +1,12 @@
+Subject: Passage Weather Report — {vessel_name} | Voyage {voyage_number}
+
+To: {recipients}
+
+Please find attached the passage weather report for {vessel_name} (voyage {voyage_number}).
+
+Route: {route_line}
+Generated: {timestamp}
+
+The PDF is attached for review.
+
+— VoyagePM

@@ -5,12 +5,46 @@ from __future__ import annotations
 import smtplib
 from email.message import EmailMessage
 from pathlib import Path
+from typing import Any
 
 from report_sender.config import settings
+from report_sender.draft import (
+    GENERIC,
+    base_context,
+    classify_report,
+    merge_context,
+    registry_lookup,
+    render_email,
+)
 
 
 def _parse_emails(raw: str) -> list[str]:
     return [e.strip() for e in (raw or "").replace(";", ",").split(",") if e.strip() and "@" in e]
+
+
+def _db_overlay(voyage_number: str) -> dict[str, str]:
+    """Lazy import so folder-watch still works with no DB URLs configured."""
+    if not voyage_number or not settings.db_urls:
+        return {}
+    from report_sender.db import voyage_contacts, voyage_details
+
+    out: dict[str, str] = {}
+    emails: list[str] = []
+    for url in settings.db_urls:
+        emails.extend(voyage_contacts(url, voyage_number))
+        for k, v in voyage_details(url, voyage_number).items():
+            if v and not out.get(k):
+                out[k] = v
+    if emails:
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for e in emails:
+            key = e.lower()
+            if key not in seen:
+                seen.add(key)
+                uniq.append(e)
+        out["voyage_contacts"] = ", ".join(uniq)
+    return out
 
 
 def resolve_report_recipients(
@@ -19,9 +53,16 @@ def resolve_report_recipients(
     report_bucket: str = "",
     audience: str = "",
 ) -> list[str]:
-    """Current behavior stays env-based; signature leaves room for DB routing later."""
-    _ = (voyage_number, report_bucket, audience)
-    return _parse_emails(settings.review_email)
+    """env = review address; db = vpm_voyage_email / registry alert_emails, then env."""
+    _ = (report_bucket, audience)
+    env_to = _parse_emails(settings.review_email)
+    if (settings.report_email_source or "env").strip().lower() != "db":
+        return env_to
+    overlay = _db_overlay(voyage_number)
+    found = _parse_emails(overlay.get("voyage_contacts") or "")
+    if not found:
+        found = _parse_emails(registry_lookup(voyage_number).get("voyage_contacts") or "")
+    return found or env_to
 
 
 def send_report_pdf(
@@ -29,11 +70,14 @@ def send_report_pdf(
     *,
     to: list[str] | None = None,
     voyage_number: str = "",
+    vessel_id: str = "",
+    vessel_name: str = "",
     report_bucket: str = "",
     audience: str = "",
     subject_suffix: str = "",
+    extra: dict[str, Any] | None = None,
 ) -> bool:
-    """Attach PDF and send. Never raises; False = skipped/failed."""
+    """Attach PDF and send a type-specific body. Never raises; False = skipped/failed."""
     path = Path(path)
     if path.suffix.lower() != ".pdf" or not path.is_file():
         return False
@@ -49,20 +93,31 @@ def send_report_pdf(
     if not host:
         log("skip", f"{path.name}: VPM_SMTP_HOST unset")
         return False
-    from_addr = (settings.smtp_from or settings.smtp_user or recipients[0]).strip()
-    voy = voyage_number or path.parent.name
+
+    report_type = classify_report(path.name, report_bucket)
+    pinned = {k: str(v).strip() for k, v in (extra or {}).items() if v is not None and str(v).strip()}
+    ctx = base_context(
+        path=path,
+        voyage_number=voyage_number or path.parent.name,
+        vessel_id=vessel_id,
+        vessel_name=vessel_name,
+        report_bucket=report_bucket,
+        extra=pinned,
+    )
+    merge_context(ctx, registry_lookup(ctx["voyage_number"]), _db_overlay(ctx["voyage_number"]), pinned)
+    ctx["recipients"] = ", ".join(recipients)
+    ctx["to"] = ctx["recipients"]
+    if not ctx.get("voyage_contacts") or ctx["voyage_contacts"] == "—":
+        ctx["voyage_contacts"] = ctx["recipients"]
+
+    subject, body = render_email(report_type, ctx)
     suffix = f" {subject_suffix}" if subject_suffix else ""
+    from_addr = (settings.smtp_from or settings.smtp_user or recipients[0]).strip()
     msg = EmailMessage()
-    msg["Subject"] = f"VoyagePM report{f' {voy}' if voy else ''}{suffix}: {path.name}"
+    msg["Subject"] = f"{subject}{suffix}"
     msg["From"] = from_addr
     msg["To"] = ", ".join(recipients)
-    msg.set_content(
-        "A VoyagePM report is ready for review.\n\n"
-        f"Voyage: {voy or '—'}\n"
-        f"Report folder: {report_bucket or '—'}\n"
-        f"Audience: {audience or 'default'}\n"
-        f"File: {path.name}\n"
-    )
+    msg.set_content(body)
     msg.add_attachment(
         path.read_bytes(),
         maintype="application",
@@ -80,7 +135,8 @@ def send_report_pdf(
             if settings.smtp_user:
                 smtp.login(settings.smtp_user, settings.smtp_password)
             smtp.send_message(msg)
-        log("sent", f"{path.name} → {', '.join(recipients)}")
+        kind = report_type if report_type != GENERIC else "report"
+        log("sent", f"{path.name} [{kind}] → {', '.join(recipients)}")
         return True
     except Exception as e:
         log("failed", f"{path.name}: {e}")
