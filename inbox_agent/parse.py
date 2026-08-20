@@ -41,6 +41,7 @@ _SECTION_TAGS = {
 
 _LAT_HEADERS = {"lat", "latitude"}
 _LON_HEADERS = {"long", "lon", "lng", "longitude"}
+_CONDITIONS = frozenset({"ballast", "laden"})
 
 
 def _norm_header(h: str) -> str:
@@ -267,6 +268,25 @@ def _fmt_cells(vals: list[Any] | None) -> str:
     return ", ".join(repr(v) for v in vals[:8])
 
 
+def _pick_enum(
+    mapping: dict[str, list[Any]],
+    *needles: str,
+    allowed: frozenset[str],
+) -> str | None:
+    """First cell value whose text contains an allowed token (Ballast/Laden, etc.)."""
+    hit = _best_field(mapping, *needles)
+    if not hit:
+        return None
+    for v in hit[1]:
+        if v is None:
+            continue
+        s = _norm_label(str(v))
+        for a in allowed:
+            if a in s:
+                return a.capitalize()
+    return None
+
+
 def _pick(mapping: dict[str, list[Any]], *needles: str, numeric: bool = False) -> Any:
     """Best label containing a needle; skip allowance/variance extras unless asked."""
     hit = _best_field(mapping, *needles)
@@ -479,26 +499,7 @@ def parse_predep_workbook(
         dest_port = _pick(fields, "destination port", "dest port", "arrival port")
         vessel_name = _pick(fields, "vessel name", "ship name")
         imo = _pick(fields, "imo no", "imo number")
-        cp_speed, speed_err = _numeric_or_issue(
-            fields, "CP Speed (knots)", "cp speed in kts", "cp speed", "speed in kts"
-        )
-        cp_consumption, cons_err = _numeric_or_issue(
-            fields,
-            "CP Consumption (MT/day)",
-            "cp consumption",
-            "consumptions(total)",
-            "consumption mt/day",
-            required=False,
-        )
-        _tol, tol_err = _numeric_or_issue(
-            fields,
-            "CP Speed tolerance",
-            "cp speed allowance",
-            "cp speed variance",
-            "cp speed tolerance",
-            required=False,
-            skip_extra=(),
-        )
+        # CP speed/cons come from consumption_speed_data/, not the Pre-Dep CP sheet.
 
         vn_hit = _best_field(fields, "voyage number", "voyage no")
         if voyage_number is None:
@@ -518,14 +519,17 @@ def parse_predep_workbook(
                 "Destination port: field not found or empty"
                 + (f" (label {dp_hit[0]!r} cells {_fmt_cells(dp_hit[1])})" if dp_hit else "")
             )
-        if speed_err:
-            missing.append(speed_err)
-        if cons_err:
-            missing.append(cons_err)
-        if tol_err:
-            missing.append(tol_err)
         if not (vessel_name or imo):
             missing.append("Vessel Name or IMO number: both empty (must match client shipping_db.ship)")
+        cp_speed = cp_consumption = None
+        try:
+            from inbox_agent.vessel_matrix import require_speed_cons
+
+            cp_speed, cp_consumption = require_speed_cons(
+                "" if vessel_name is None else str(vessel_name)
+            )
+        except ValueError as e:
+            missing.append(str(e))
 
         waypoints, wp_names = _parse_waypoints(wp_ws) if wp_ws is not None else ([], [])
         if wp_ws is not None and len(waypoints) < 2:
@@ -534,10 +538,10 @@ def parse_predep_workbook(
             raise ValueError(f"{label}: not a valid pre-voyage report.\n" + "\n".join(missing))
 
         vessel_id = str(imo).strip() if imo is not None else (str(vessel_name).strip() if vessel_name else "")
-        cond = _pick(fields, "condition (ballast/laden)", "condition")
+        cond = _pick_enum(fields, "condition (ballast/laden)", "condition", allowed=_CONDITIONS)
         etd = _pick(fields, "estimated departure time", "estimated date of departure", "etd")
         eta = _pick(fields, "estimated arrival time", "estimated date of arrival", "eta")
-        return {
+        record = {
             "voyage_number": normalize_voyage_number(str(voyage_number)),
             "vessel_id": vessel_id,
             "vessel_name": "" if vessel_name is None else str(vessel_name).strip(),
@@ -550,7 +554,7 @@ def parse_predep_workbook(
             "waypoint_names": wp_names,
             "source_file": label,
             "format": "predep_xlsx",
-            "condition": "" if cond is None else str(cond).strip(),
+            "condition": cond or "",
             "etd": "" if etd is None else str(etd).strip(),
             "eta": "" if eta is None else str(eta).strip(),
             "displacement": _pick(fields, "displacement", numeric=True),
@@ -560,6 +564,12 @@ def parse_predep_workbook(
             ),
             "voyage_priority": str(_pick(fields, "voyage priority") or "").strip(),
         }
+        from inbox_agent.validate import validate_pre_voyage
+
+        extra = validate_pre_voyage(record)
+        if extra:
+            raise ValueError(f"{label}: not a valid pre-voyage report.\n" + "\n".join(extra))
+        return record
     finally:
         wb.close()
 

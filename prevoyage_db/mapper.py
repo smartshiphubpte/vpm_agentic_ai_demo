@@ -13,6 +13,23 @@ _MONTHS = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
+_MONTH_FULL = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def _month_num(raw: str) -> int | None:
+    """1–12 from numeric month, JUN, Sept, September, etc."""
+    m = raw.strip().lower()
+    if m.isdigit():
+        n = int(m)
+        return n if 1 <= n <= 12 else None
+    if m in _MONTH_FULL:
+        return _MONTH_FULL[m]
+    if len(m) >= 3:
+        return _MONTHS.get(m[:3])
+    return None
 
 
 def _parse_ts(raw: Any) -> datetime | None:
@@ -31,26 +48,37 @@ def _parse_ts(raw: Any) -> datetime | None:
     except ValueError:
         pass
     m = re.match(
-        r"(?i)(\d{1,2})[-/]([A-Za-z]{3}|\d{1,2})[-/](\d{4})\s+(\d{3,4})\s*(?:LT)?\s*"
+        r"(?i)(\d{1,2})[-/]([A-Za-z]+|\d{1,2})[-/](\d{4})\s+(\d{3,4})\s*(?:LT)?\s*"
         r"\(UTC\s*([+-]\d{1,2})(?::(\d{2}))?\)",
+        s,
+    )
+    if m:
+        day = int(m.group(1))
+        month = _month_num(m.group(2))
+        if month:
+            year = int(m.group(3))
+            hm = m.group(4).zfill(4)
+            hour, minute = int(hm[:2]), int(hm[2:])
+            off_h, off_m = int(m.group(5)), int(m.group(6) or 0)
+            from datetime import timedelta
+
+            local = datetime(year, month, day, hour, minute)
+            utc = local - timedelta(hours=off_h, minutes=off_m if off_h >= 0 else -off_m)
+            return utc.replace(tzinfo=timezone.utc)
+    m = re.match(
+        r"(?i)(\d{1,2})[-/]([A-Za-z]+|\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2})\s*(?:\(UTC\s*)?([+-]\d{1,2})\)?",
         s,
     )
     if not m:
         return None
-    day = int(m.group(1))
-    mon_raw = m.group(2)
-    month = _MONTHS.get(mon_raw[:3].lower()) if mon_raw.isalpha() else int(mon_raw)
+    month = _month_num(m.group(2))
     if not month:
         return None
-    year = int(m.group(3))
-    hm = m.group(4).zfill(4)
-    hour, minute = int(hm[:2]), int(hm[2:])
-    off_h, off_m = int(m.group(5)), int(m.group(6) or 0)
     from datetime import timedelta
 
-    local = datetime(year, month, day, hour, minute)
-    utc = local - timedelta(hours=off_h, minutes=off_m if off_h >= 0 else -off_m)
-    return utc.replace(tzinfo=timezone.utc)
+    local = datetime(int(m.group(3)), month, int(m.group(1)), int(m.group(4)), int(m.group(5)))
+    off = int(m.group(6))
+    return (local - timedelta(hours=off)).replace(tzinfo=timezone.utc)
 
 
 def waypoints_to_geojson(
@@ -376,6 +404,9 @@ if __name__ == "__main__":
     assert voy["etd"].isoformat() == "2026-08-17T00:00:00+00:00"
     etd = _parse_ts("30-JUL-2026 1730LT (UTC+7)")
     assert etd is not None and etd.hour == 10 and etd.minute == 30 and etd.day == 30
+    sept = _parse_ts("15-Sept-2026 16:00 -3")
+    assert sept is not None and sept.month == 9 and sept.day == 15 and sept.hour == 19
+    assert _month_num("Sept") == 9 and _month_num("September") == 9
     meta = build_vo_comparison_metadata(
         {"distanceNm": 100.0, "etaHours": 10.0, "fuelMt": 20.0, "speedKn": 10.0},
         [{"windKn": 10.0, "waveM": 1.3, "swellM": 0.7, "pressureHpa": 1015}],

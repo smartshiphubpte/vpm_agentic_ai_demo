@@ -95,6 +95,22 @@ def voyage_leg_tag(voyage_number: str) -> str | None:
     return tag or None
 
 
+def is_valid_voyage_number(voyage_number: str) -> bool:
+    """V + id; optional trailing L/B with or without a digit (V2610-02, V2610-02-L1, V2611L)."""
+    key = compact_voyage_number(voyage_number)
+    if not key.startswith("V") or len(key) < 2:
+        return False
+    body = key[1:]
+    leg = _LEG_TAG.search(body)
+    if leg:
+        if leg.end() != len(body):
+            return False
+        body = body[: leg.start()]
+    elif re.search(r"[-_][A-Z]\d*$", body):
+        return False
+    return bool(body) and bool(re.fullmatch(r"[0-9A-Z-]+", body))
+
+
 class VoyageRegistry:
     def __init__(self, path: Path | None = None):
         raw = Path(path or settings.registry_path)
@@ -212,6 +228,12 @@ if __name__ == "__main__":
     assert voyage_leg_tag("V2611L") == "L"
     assert voyage_leg_tag("V2611B") == "B"
     assert voyage_leg_tag("V2611") is None
+    assert is_valid_voyage_number("V2610-02")
+    assert is_valid_voyage_number("V2610-02-L1")
+    assert is_valid_voyage_number("V2610-02-L")
+    assert is_valid_voyage_number("V2611L")
+    assert is_valid_voyage_number("2611 B")
+    assert not is_valid_voyage_number("V2610-02-X1")
 
     r = VoyageRegistry.__new__(VoyageRegistry)
     r.path = Path("/tmp/voyage_registry_selfcheck.json")
