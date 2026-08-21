@@ -1,21 +1,19 @@
-# Testing env: inbox ingest + Excel → Postgres
+# Testing env: email ingest + Excel → Postgres
 
-Run **only** the inbox watcher and the pre-voyage DB writer. Skip weather, route-opt, noon, storm, port-weather, and report-sender.
+Run **only** the IMAP ingest service and the pre-voyage DB writer. Skip weather, route-opt, noon, storm, port-weather, and report-sender.
 
-This slice is for a VM that already has **voyagepm_be** and **Postgres** (VoyagePM + client DBs). Ingest does **not** call the backend. It parses Excel, writes a local voyage registry, and drops a job file. `prevoyage_db` claims that job and upserts `shipping_db.voyages` + `shipping_db.master_routes`.
+This slice is for a VM that already has **Postgres** (VoyagePM + client DBs). Ingest does **not** call the backend. It polls IMAP, parses Pre-Dep attachments in memory, and drops a job file. `prevoyage_db` claims that job and upserts `shipping_db.voyages` + `shipping_db.master_routes`.
 
 ```text
 Email (IMAP UNSEEN) → parse attachment in memory
         → valid: VPM_JOBS_DIR job → prevoyage_db → Postgres
         → invalid: forward original + missing-field list to VPM_MAIL_REJECT_TO
-        (attachment is never written to VPM_INBOX_DIR)
-
-Folder drop still works: Excel → VPM_INBOX_DIR/incoming/ → ingest → job → DB
+        (attachment is never written to disk)
 ```
 
-Do **not** also run `python3 scripts/run_daemon.py` — that would double-pick inbox files.
+The `ingest` microservice is **IMAP-only** — no folder watch, no registry, no report files. For local folder-drop testing use `python3 scripts/run_daemon.py` instead (do **not** run that alongside `ingest`).
 
-Pickup, validation, IMAP, and ingest accept live in `inbox_agent/` (not the drop folder `inbox/`). Other compose services: `prevoyage_db/`, `report_sender/`, `port_weather/`, `noon_agent/`, `weather_agent/`, `routeopt_agent/`, `storm_agent/`.
+Pickup, validation, IMAP, and ingest accept live in `inbox_agent/`. Other compose services: `prevoyage_db/`, `report_sender/`, `port_weather/`, `noon_agent/`, `weather_agent/`, `routeopt_agent/`, `storm_agent/`.
 
 ---
 
@@ -23,7 +21,7 @@ Pickup, validation, IMAP, and ingest accept live in `inbox_agent/` (not the drop
 
 | Process | Command | Role |
 |---------|---------|------|
-| `ingest` | `python3 scripts/run_service.py ingest` | Watches inbox, parses pre-voyage Excel/CSV, enqueues DB job |
+| `ingest` | `python3 scripts/run_service.py ingest` | IMAP poll → parse Pre-Dep Excel/CSV in memory → enqueue DB job |
 | `prevoyage_db` | `python3 scripts/run_service.py prevoyage_db` | Writes voyage + master route to Postgres |
 
 Docker equivalent (same two services):
@@ -43,18 +41,16 @@ cp .env.example .env
 cp prevoyage_db/.env.example prevoyage_db/.env
 ```
 
-### Minimum set (folder drop → Postgres)
+### Minimum set (email → Postgres)
 
 | File | Variable | Why |
 |------|----------|-----|
 | `.env` | `VPM_MODE=mock` | Ingest does not call `voyagepm_be` |
 | `.env` | `VPM_TENANT` | Tags the job (must match a tenant in `PREVOYAGE_DB_TENANTS`, lowercase) |
 | `.env` | `VPM_JOBS_DIR` | Shared job bus with the writer |
-| `.env` | `VPM_INBOX_DIR` | Folder watcher; drop files in `incoming/` |
-| `.env` | `VPM_REGISTRY_PATH` | Local voyage JSON |
-| `.env` | `VPM_REPORTS_OUT_DIR` | Ingest still writes pre-voyage txt/pdf |
-| `.env` | `VPM_TEMPLATES_DIR` | Template for that report (repo `templates/`) |
-| `.env` | `VPM_DAEMON_FLOW=noon_monitoring` | Do not enqueue weather / route-opt jobs |
+| `.env` | `VPM_MAIL_EMAIL` | Mailbox address (iPowered: full address is the IMAP user) |
+| `.env` | `VPM_MAIL_PASSWORD` | Mailbox password — **required**; ingest exits without it |
+| `.env` | `VPM_MAIL_REJECT_TO` | Where invalid Pre-Dep mail is forwarded |
 | `prevoyage_db/.env` | `VPM_JOBS_DIR` | **Same absolute path** as root `.env` |
 | `prevoyage_db/.env` | `PREVOYAGE_DB_TENANTS` | Comma list of tenant keys, e.g. `orion` |
 | `prevoyage_db/.env` | `PREVOYAGE_DB_<TENANT>_VPM_URL` | VoyagePM Postgres (`voyages` + `master_routes`) |
@@ -64,26 +60,20 @@ cp prevoyage_db/.env.example prevoyage_db/.env
 
 Do **not** set `VPM_EMAIL` / `VPM_PASSWORD` / `VPM_BASE_URL` for this slice — those are VoyagePM backend login, not the mailbox.
 
-### Also set for IMAP (optional)
+Not needed for this slice: `VPM_INBOX_DIR`, `VPM_REGISTRY_PATH`, `VPM_REPORTS_OUT_DIR`, `VPM_TEMPLATES_DIR`, `VPM_DAEMON_FLOW`.
 
-Folder drop works without these. IMAP is on only when both mailbox user and password are set (`VPM_MAIL_EMAIL` or `VPM_MAIL_IMAP_USER` + `VPM_MAIL_PASSWORD`).
+### Optional mail tuning
 
 | File | Variable | Why |
 |------|----------|-----|
-| `.env` | `VPM_MAIL_EMAIL` | Mailbox address (iPowered: full address is the IMAP user) |
-| `.env` | `VPM_MAIL_PASSWORD` | Mailbox password |
-| `.env` | `VPM_MAIL_REJECT_TO` | Where invalid Pre-Dep mail is forwarded |
-| `.env` | `VPM_SMTP_HOST` | SMTP for that reject forward |
-| `.env` | `VPM_SMTP_PORT` | Default `587` |
-| `.env` | `VPM_SMTP_USER` | SMTP auth user |
-| `.env` | `VPM_SMTP_PASSWORD` | SMTP auth password |
-| `.env` | `VPM_SMTP_FROM` | From address on the reject mail |
+| `.env` | `VPM_MAIL_POLL_SECONDS` | IMAP poll interval (default `900`) |
+| `.env` | `VPM_SMTP_*` | Override only — reject mail normally sends **from** `VPM_MAIL_EMAIL` via the same mailbox SMTP (iPower `smtp.ipower.com`) |
 
-Optional IMAP overrides (only if autodetect is wrong): `VPM_MAIL_IMAP_HOST`, `VPM_MAIL_IMAP_PORT`, `VPM_MAIL_IMAP_SSL`, `VPM_MAIL_IMAP_FOLDER`, `VPM_MAIL_SUBJECT_CONTAINS`, `VPM_MAIL_POLL_SECONDS` (default `900`).
+Optional IMAP overrides (only if autodetect is wrong): `VPM_MAIL_IMAP_HOST`, `VPM_MAIL_IMAP_PORT`, `VPM_MAIL_IMAP_SSL`, `VPM_MAIL_IMAP_FOLDER`, `VPM_MAIL_SUBJECT_CONTAINS`.
 
 ### Defaults you can leave unset
 
-Writer uses these if omitted: `PREVOYAGE_DB_POLL_SECONDS=2`, `PREVOYAGE_DB_DRY_RUN=false`, `PREVOYAGE_DB_SSLMODE=prefer`, `PREVOYAGE_DB_CONNECT_TIMEOUT=45`, `PREVOYAGE_DB_CONNECT_RETRIES=4`, schemas `shipping_db`, tables `ship` / `voyages` / `master_routes`. Folder poll default is `VPM_INBOX_POLL_SECONDS=30`.
+Writer uses these if omitted: `PREVOYAGE_DB_POLL_SECONDS=2`, `PREVOYAGE_DB_DRY_RUN=false`, `PREVOYAGE_DB_SSLMODE=prefer`, `PREVOYAGE_DB_CONNECT_TIMEOUT=45`, `PREVOYAGE_DB_CONNECT_RETRIES=4`, schemas `shipping_db`, tables `ship` / `voyages` / `master_routes`. Mail poll default is `VPM_MAIL_POLL_SECONDS=900`.
 
 First-pass dry run: `PREVOYAGE_DB_DRY_RUN=true` (maps + vessel lookup, no INSERT).
 
@@ -101,34 +91,15 @@ VPM_TENANT=orion
 # Shared job bus with prevoyage_db (same absolute path on both processes)
 VPM_JOBS_DIR=/var/vpm/jobs
 
-# Drop folder — files go in incoming/, not the root
-VPM_INBOX_DIR=/var/vpm/inbox
-
-# Local voyage state (directory or .json path both work)
-VPM_REGISTRY_PATH=/var/vpm/registry
-
-# Ingest still writes a pre-voyage txt/pdf here; unused if you skip report-sender
-VPM_REPORTS_OUT_DIR=/var/vpm/reports
-VPM_TEMPLATES_DIR=/path/to/voyagepm_agentic_framework/templates
-
-# Ingest-only chain: do not queue weather / route-opt jobs
-VPM_DAEMON_FLOW=noon_monitoring
-
-VPM_INBOX_POLL_SECONDS=15
-
-# IMAP (omit all of these for folder-drop only)
+# IMAP — required for ingest microservice
 # iPowered: full address + mailbox password is enough
 VPM_MAIL_EMAIL=ops@yourcompany.com
 VPM_MAIL_PASSWORD=
 VPM_MAIL_REJECT_TO=ops-review@yourcompany.com
 VPM_MAIL_POLL_SECONDS=900
 
-# SMTP used only to forward rejected mail
-VPM_SMTP_HOST=
-VPM_SMTP_PORT=587
-VPM_SMTP_USER=
-VPM_SMTP_PASSWORD=
-VPM_SMTP_FROM=
+# Reject mail is sent FROM VPM_MAIL_EMAIL (same mailbox SMTP). VPM_SMTP_* not required.
+# Optional override: VPM_SMTP_HOST=smtp.ipower.com
 ```
 
 ### `prevoyage_db/.env` (writer) — copy-paste
@@ -171,10 +142,10 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-mkdir -p /var/vpm/inbox/incoming /var/vpm/jobs /var/vpm/registry /var/vpm/reports
+mkdir -p /var/vpm/jobs
 ```
 
-Compose bind-mounts host paths from `.env`. Override the defaults in `docker-compose.yml` (they currently fall back to a developer laptop path). Set `VPM_INBOX_DIR`, `VPM_JOBS_DIR`, `VPM_REGISTRY_PATH`, `VPM_REPORTS_OUT_DIR`, `VPM_TEMPLATES_DIR` to real VM directories.
+Compose bind-mounts only `VPM_JOBS_DIR` for `ingest` and `prevoyage-db` (no inbox/registry/reports volumes).
 
 Postgres must be reachable from this VM (`127.0.0.1` if it is local; otherwise the DB host the backend already uses). Allow the VM in `pg_hba.conf` / firewall if the DBs are remote.
 
@@ -192,9 +163,11 @@ python3 scripts/test_prevoyage_db.py check --tenant orion
 # 2) writer
 python3 scripts/run_service.py prevoyage_db
 
-# 3) inbox (other terminal)
+# 3) ingest (other terminal)
 python3 scripts/run_service.py ingest
 ```
+
+Ingest exits immediately if `VPM_MAIL_EMAIL` + `VPM_MAIL_PASSWORD` are unset.
 
 Writer log on start should include `tenants=orion` and `jobs=/var/vpm/jobs`. If it exits with “no tenants”, the `PREVOYAGE_DB_*_URL` vars did not load (`prevoyage_db/.env` missing or URLs empty).
 
@@ -204,34 +177,24 @@ Writer log on start should include `tenants=orion` and `jobs=/var/vpm/jobs`. If 
 
 ### Email
 
-Enable IMAP as above. Send a Pre-Dep `.xlsx` to `VPM_MAIL_EMAIL`. Valid mail is queued for `prevoyage_db` (no copy in `incoming/`). Invalid mail is forwarded to `VPM_MAIL_REJECT_TO` with the missing fields listed; the original message is attached as `.eml`.
+Enable IMAP as above. Send a Pre-Dep `.xlsx` to `VPM_MAIL_EMAIL`. Valid mail is queued for `prevoyage_db`. Invalid mail is forwarded **from** `VPM_MAIL_EMAIL` to `VPM_MAIL_REJECT_TO` with the missing fields listed; the original message is attached as `.eml`. No separate Gmail/`VPM_SMTP_*` is required for iPowered (uses `smtp.ipower.com` with the same password).
 
 Gmail/Workspace: use an app password, IMAP enabled. Microsoft 365: IMAP must be allowed (or this poller will not see the mailbox).
-
-### Folder drop
-
-Drop the file into **incoming**, not the inbox root:
-
-```bash
-cp /path/to/Pre-Dep.xlsx /var/vpm/inbox/incoming/
-```
-
-Supported: `.xlsx` / `.xlsm` / `.csv` with SSH Pre-Dep sheets (`Voyage Details`, `Waypoints List`, …) or a flat file with waypoints + CP speed.
 
 Expect:
 
 | Check | Where |
 |-------|--------|
-| File left inbox | `/var/vpm/inbox/sent/` (failures → `failed/`) |
-| Registry | `/var/vpm/registry/voyage_registry.json` |
-| Job claimed | ingest log: `queued prevoyage_db:orion:<VOY>` then writer: `done orion <VOY> → voyage_id=…` |
+| Job queued | ingest log: `queued prevoyage_db:orion:<VOY>` |
+| Job claimed | writer log: `done orion <VOY> → voyage_id=…` |
 | DB | `shipping_db.voyages` + `shipping_db.master_routes` for that voyage number |
 
-Optional without the inbox loop:
+Optional without the ingest loop:
 
 ```bash
 python3 scripts/test_prevoyage_db.py --tenant orion lookup "VESSEL NAME"
 python3 scripts/test_prevoyage_db.py --tenant orion dry-run /path/to/Pre-Dep.xlsx
+python3 scripts/test_mail_ingest_e2e.py
 ```
 
 ---
@@ -242,7 +205,7 @@ python3 scripts/test_prevoyage_db.py --tenant orion dry-run /path/to/Pre-Dep.xls
 2. `VPM_JOBS_DIR` differs between `.env` and `prevoyage_db/.env` → writer never sees the job.
 3. Tenant key mismatch (`orion` vs `Orion`) — both sides are lowercased; URLs must use `PREVOYAGE_DB_ORION_…`.
 4. Vessel name not in client `ship` table → writer fails the job (see `VPM_JOBS_DIR` failed files / writer log).
-5. File dropped in inbox root instead of `incoming/`.
-6. `run_daemon.py` and `ingest` both running → race on the same file.
+5. Ingest container exits on start → `VPM_MAIL_EMAIL` / `VPM_MAIL_PASSWORD` missing.
+6. `run_daemon.py` and `ingest` both running → duplicate processing if you also use folder drop locally.
 
 Stop with Ctrl-C. Compose: `docker compose stop ingest prevoyage-db`.

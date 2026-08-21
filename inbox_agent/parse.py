@@ -698,12 +698,12 @@ def parse_pre_voyage(
     lines = text.splitlines()
     if len(lines) < 2:
         raise ValueError(f"{label}: need header + one data row")
-    headers = [_norm_header(h) for h in lines[0].split(",")]
-    parts = lines[1].split(",", 6)
-    if len(parts) < 7:
-        raise ValueError(f"{label}: bad pre-voyage CSV row")
-    row = dict(zip(headers[:6], [p.strip() for p in parts[:6]]))
-    row["waypoints"] = parts[6].strip()
+    rows = list(csv.reader(io.StringIO("\n".join(lines))))
+    if len(rows) < 2:
+        raise ValueError(f"{label}: need header + one data row")
+    headers = [_norm_header(h) for h in rows[0]]
+    values = [("" if v is None else str(v).strip()) for v in rows[1][: len(headers)]]
+    row = dict(zip(headers, values))
     src = label if data is not None else str(path)
     return _parse_flat_row(row, src)
 
@@ -737,8 +737,15 @@ def _parse_flat_row(row: dict[str, Any], source: str) -> dict[str, Any]:
         "cp_consumption_mt_day": cons,
         "alert_emails": emails,
         "master_waypoints": _parse_waypoint_field(row["waypoints"]),
+        "waypoint_names": [
+            n.strip() for n in str(row.get("waypoint_names") or "").split("|") if n.strip()
+        ],
         "source_file": source,
         "format": "flat",
+        "condition": str(row.get("condition") or "").strip(),
+        "displacement": row.get("displacement"),
+        "cargo_weight": row.get("cargo_weight"),
+        "max_draft_on_departure": row.get("max_draft_on_departure"),
         "etd": str(row.get("etd") or row.get("estimated_departure_time") or row.get("estimated_date_of_departure") or "").strip(),
         "eta": str(row.get("eta") or row.get("estimated_arrival_time") or row.get("estimated_date_of_arrival") or "").strip(),
     }
@@ -760,12 +767,21 @@ def try_parse_pre_voyage(*, filename: str, data: bytes) -> tuple[dict[str, Any] 
             "not a pre-voyage / Pre-Dep workbook."
         ]
     try:
-        return parse_pre_voyage(data=data, filename=name), []
+        rec = parse_pre_voyage(data=data, filename=name)
     except Exception as e:
         lines = [ln.strip() for ln in str(e).splitlines() if ln.strip()]
         if not lines:
             return None, [f"{name}: parse failed"]
         return None, [ln if ln.lower().startswith(name.lower()) else f"{name}: {ln}" for ln in lines]
+    from inbox_agent.validate import validate_pre_voyage, vessel_register_issues
+
+    field_issues = validate_pre_voyage(rec)
+    if field_issues:
+        return None, [f"{name}: {line}" for line in field_issues]
+    reg = vessel_register_issues(rec)
+    if reg:
+        return None, [f"{name}: {line}" for line in reg]
+    return rec, []
 
 
 def parse_noon_report(path: str | Path) -> dict[str, Any]:

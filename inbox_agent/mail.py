@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import imaplib
 import smtplib
+import socket
+import time
 from dataclasses import dataclass, field
 from email import policy
 from email.message import EmailMessage
@@ -15,6 +18,10 @@ from inbox_agent.parse import _INBOX_SUFFIXES, try_parse_pre_voyage
 
 _ATTACH_OK = {s.lower() for s in _INBOX_SUFFIXES}
 
+# Fresh connect each poll; retry brief DNS/network blips so the next login succeeds.
+_CONNECT_ATTEMPTS = 5
+_CONNECT_BASE_DELAY_S = 2.0
+
 # Custom-domain mailboxes on iPowered still login at imap.ipower.com with the full address.
 _KNOWN_IMAP = {
     "gmail.com": ("imap.gmail.com",),
@@ -25,7 +32,18 @@ _KNOWN_IMAP = {
     "office365.com": ("outlook.office365.com",),
 }
 
+# SMTP host for the same mailbox (reject mail From = VPM_MAIL_EMAIL).
+_KNOWN_SMTP = {
+    "gmail.com": ("smtp.gmail.com",),
+    "googlemail.com": ("smtp.gmail.com",),
+    "outlook.com": ("smtp.office365.com",),
+    "hotmail.com": ("smtp.office365.com",),
+    "live.com": ("smtp.office365.com",),
+    "office365.com": ("smtp.office365.com",),
+}
+
 _working_host: str | None = None
+_working_smtp: str | None = None
 
 
 @dataclass
@@ -62,6 +80,43 @@ def _candidate_hosts() -> list[str]:
     return out
 
 
+def _is_transient(exc: BaseException | None) -> bool:
+    """DNS / timeout / reset — safe to retry; auth failures are not."""
+    if exc is None:
+        return False
+    if isinstance(exc, (socket.gaierror, socket.timeout, TimeoutError, ConnectionResetError, BrokenPipeError)):
+        return True
+    if isinstance(exc, OSError):
+        # EAI_AGAIN lives on socket, not errno, on Linux.
+        bad = {
+            getattr(socket, "EAI_AGAIN", -3),
+            errno.ECONNREFUSED,
+            errno.ECONNRESET,
+            errno.ETIMEDOUT,
+            errno.ENETUNREACH,
+            errno.EHOSTUNREACH,
+            -2,
+            -3,
+        }
+        if getattr(exc, "errno", None) in bad:
+            return True
+    msg = str(exc).lower()
+    return any(
+        s in msg
+        for s in (
+            "temporary failure",
+            "name resolution",
+            "timed out",
+            "timeout",
+            "connection reset",
+            "connection refused",
+            "network is unreachable",
+            "eof occurred",
+            "broken pipe",
+        )
+    )
+
+
 def _open_imap(host: str) -> imaplib.IMAP4:
     port = int(settings.mail_imap_port)
     timeout = 60
@@ -75,22 +130,38 @@ def _open_imap(host: str) -> imaplib.IMAP4:
 
 
 def _connect() -> imaplib.IMAP4:
+    """Open a new IMAP session (no keep-alive). Retries transient DNS/network errors."""
     global _working_host
-    hosts = _candidate_hosts()
-    if _working_host and _working_host in hosts:
-        hosts = [_working_host, *[h for h in hosts if h != _working_host]]
     last: Exception | None = None
-    for host in hosts:
-        try:
-            imap = _open_imap(host)
-            if _working_host != host:
-                print(f"[MailInbox] IMAP login {settings.mail_imap_user} @ {host}", flush=True)
-            _working_host = host
-            return imap
-        except Exception as e:
-            last = e
+    for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+        hosts = _candidate_hosts()
+        if _working_host and _working_host in hosts:
+            hosts = [_working_host, *[h for h in hosts if h != _working_host]]
+        for host in hosts:
+            try:
+                imap = _open_imap(host)
+                if _working_host != host:
+                    print(
+                        f"[MailInbox] IMAP login {settings.mail_imap_user} @ {host}",
+                        flush=True,
+                    )
+                _working_host = host
+                return imap
+            except Exception as e:
+                last = e
+        if attempt < _CONNECT_ATTEMPTS and _is_transient(last):
+            delay = min(60.0, _CONNECT_BASE_DELAY_S * (2 ** (attempt - 1)))
+            print(
+                f"[MailInbox] IMAP connect retry {attempt}/{_CONNECT_ATTEMPTS} "
+                f"in {delay:.0f}s ({last})",
+                flush=True,
+            )
+            time.sleep(delay)
+            continue
+        break
+    _working_host = None  # next poll re-probes all hosts
     raise RuntimeError(
-        f"IMAP login failed for {settings.mail_imap_user!r} on {hosts}: {last}"
+        f"IMAP connect failed for {settings.mail_imap_user!r} on {_candidate_hosts()}: {last}"
     )
 
 
@@ -174,27 +245,89 @@ def mark_seen(uid: str) -> None:
             pass
 
 
+def _smtp_candidate_hosts() -> list[str]:
+    """SMTP for reject mail — same mailbox as IMAP unless VPM_SMTP_HOST is set."""
+    explicit = (settings.smtp_host or "").strip()
+    if explicit:
+        return [explicit]
+    user = (settings.mail_imap_user or "").strip().lower()
+    domain = user.split("@", 1)[-1] if "@" in user else ""
+    known = _KNOWN_SMTP.get(domain)
+    if known:
+        return list(known)
+    hosts = ["smtp.ipower.com", "mail.ipower.com"]
+    if domain:
+        hosts.extend([f"smtp.{domain}", f"mail.{domain}"])
+    seen: set[str] = set()
+    out: list[str] = []
+    for h in hosts:
+        if h not in seen:
+            seen.add(h)
+            out.append(h)
+    return out
+
+
+def _smtp_auth() -> tuple[str, str]:
+    """Prefer mailbox credentials; fall back to VPM_SMTP_* if mailbox unset."""
+    user = (settings.mail_imap_user or settings.smtp_user or "").strip()
+    password = settings.mail_imap_password or settings.smtp_password or ""
+    if not user or not password:
+        raise RuntimeError(
+            "Mailbox credentials unset — set VPM_MAIL_EMAIL + VPM_MAIL_PASSWORD "
+            "to send reject mail from the same inbox"
+        )
+    return user, password
+
+
 def _smtp_send(msg: EmailMessage) -> None:
-    host = (settings.smtp_host or "").strip()
-    if not host:
-        raise RuntimeError("VPM_SMTP_HOST unset — cannot forward rejected mail")
+    global _working_smtp
+    user, password = _smtp_auth()
     port = int(settings.smtp_port or 587)
-    if port == 465:
-        smtp = smtplib.SMTP_SSL(host, port, timeout=120)
-    else:
-        smtp = smtplib.SMTP(host, port, timeout=120)
-        smtp.starttls()
-    with smtp:
-        if settings.smtp_user:
-            smtp.login(settings.smtp_user, settings.smtp_password)
-        smtp.send_message(msg)
+    last: Exception | None = None
+    for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+        hosts = _smtp_candidate_hosts()
+        if _working_smtp and _working_smtp in hosts:
+            hosts = [_working_smtp, *[h for h in hosts if h != _working_smtp]]
+        for host in hosts:
+            try:
+                if port == 465:
+                    smtp = smtplib.SMTP_SSL(host, port, timeout=120)
+                else:
+                    smtp = smtplib.SMTP(host, port, timeout=120)
+                    smtp.starttls()
+                with smtp:
+                    smtp.login(user, password)
+                    smtp.send_message(msg)
+                if _working_smtp != host:
+                    print(f"[MailInbox] SMTP reject via {user} @ {host}", flush=True)
+                _working_smtp = host
+                return
+            except Exception as e:
+                last = e
+        if attempt < _CONNECT_ATTEMPTS and _is_transient(last):
+            delay = min(60.0, _CONNECT_BASE_DELAY_S * (2 ** (attempt - 1)))
+            print(
+                f"[MailInbox] SMTP connect retry {attempt}/{_CONNECT_ATTEMPTS} "
+                f"in {delay:.0f}s ({last})",
+                flush=True,
+            )
+            time.sleep(delay)
+            continue
+        break
+    _working_smtp = None
+    raise RuntimeError(
+        f"SMTP reject send failed for {user!r} on {_smtp_candidate_hosts()}: {last}"
+    )
 
 
 def forward_rejection(mail: IncomingMail, reasons: list[str], *, accepted: int = 0) -> None:
     to = (settings.mail_reject_to or "").strip()
     if not to:
         raise RuntimeError("VPM_MAIL_REJECT_TO unset — cannot forward rejected mail")
-    from_addr = (settings.smtp_from or settings.smtp_user or settings.mail_imap_user).strip()
+    # Always From the mailbox that received the Excel (not a separate Gmail/report SMTP).
+    from_addr = (settings.mail_imap_user or settings.smtp_from or settings.smtp_user).strip()
+    if not from_addr:
+        raise RuntimeError("VPM_MAIL_EMAIL unset — cannot set reject From address")
     bullets = "\n".join(f"  - {r}" for r in reasons)
     if accepted:
         lead = (
@@ -227,30 +360,6 @@ def forward_rejection(mail: IncomingMail, reasons: list[str], *, accepted: int =
     _smtp_send(msg)
 
 
-def vessel_lookup_issue(record: dict[str, Any]) -> str | None:
-    """Optional client-DB check when prevoyage_db/.env is available on this process."""
-    tenant_key = (settings.tenant or "").strip().lower()
-    if not tenant_key:
-        return "VPM_TENANT is unset — cannot enqueue a database write."
-    try:
-        from prevoyage_db.config import load_tenants
-        from prevoyage_db.vessel_lookup import lookup_vessel_id
-    except Exception:
-        return None
-    tenants = load_tenants()
-    tenant = tenants.get(tenant_key)
-    if not tenant:
-        return None
-    try:
-        lookup_vessel_id(tenant, record)
-    except Exception as e:
-        return (
-            f"Vessel not found in client database ({tenant.client_schema}.ship): {e}. "
-            "Check Vessel Name / IMO on the form against the ship register."
-        )
-    return None
-
-
 def try_attachments(mail: IncomingMail) -> tuple[list[dict[str, Any]], list[str]]:
     ok: list[dict[str, Any]] = []
     issues: list[str] = []
@@ -265,32 +374,8 @@ def try_attachments(mail: IncomingMail) -> tuple[list[dict[str, Any]], list[str]
             issues.extend(errs)
             continue
         assert rec is not None
-        extra = vessel_lookup_issue(rec)
-        if extra:
-            issues.append(f"{name}: {extra}")
-            continue
         rec["source_file"] = f"imap:{mail.uid}:{name}"
         ok.append(rec)
     return ok, issues
 
 
-if __name__ == "__main__":
-    from email.mime.application import MIMEApplication
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    from pathlib import Path
-
-    assert _candidate_hosts()[0] in ("imap.ipower.com", "imap.gmail.com", "outlook.office365.com") or settings.mail_imap_host
-    sample = Path(__file__).resolve().parents[1] / "samples" / "inbox" / "pre_voyage.csv"
-    outer = MIMEMultipart()
-    outer["Subject"] = "Pre-Dep test"
-    outer["From"] = "master@ship.test"
-    outer.attach(MIMEText("see attached"))
-    att = MIMEApplication(sample.read_bytes(), Name=sample.name)
-    att["Content-Disposition"] = f'attachment; filename="{sample.name}"'
-    outer.attach(att)
-    mail = parse_rfc822(outer.as_bytes())
-    assert mail.attachments and mail.attachments[0][0] == sample.name
-    rec, errs = try_parse_pre_voyage(filename=mail.attachments[0][0], data=mail.attachments[0][1])
-    assert rec and not errs, (rec, errs)
-    print("mail_inbox self-check ok")

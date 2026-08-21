@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from vpm_agents.config import settings
 from vpm_agents.tools.geo import haversine_nm
 from vpm_agents.tools.voyage_registry import compact_voyage_number, is_valid_voyage_number
 
@@ -233,6 +234,35 @@ def validate_pre_voyage(record: dict[str, Any], *, now: datetime | None = None) 
             issues.append(f"CP Consumption: invalid ({cons!r})")
 
     return issues
+
+
+def vessel_register_issues(record: dict[str, Any]) -> list[str]:
+    """Reject when vessel name/IMO is not in the tenant client ship register."""
+    tenant_key = (settings.tenant or "").strip().lower()
+    if not tenant_key:
+        return ["VPM_TENANT is unset — cannot enqueue a database write."]
+    try:
+        from prevoyage_db.config import load_tenants
+        from prevoyage_db.vessel_lookup import lookup_vessel_id
+    except Exception as e:
+        return [f"Vessel register lookup unavailable: {e}"]
+    tenants = load_tenants()
+    tenant = tenants.get(tenant_key)
+    if not tenant:
+        return [
+            f"Unknown tenant {tenant_key!r} — check VPM_TENANT matches PREVOYAGE_DB_TENANTS."
+        ]
+    hint = str(record.get("vessel_name") or record.get("vessel_id") or "?").strip()
+    try:
+        lookup_vessel_id(tenant, record)
+    except LookupError:
+        return [
+            f"Vessel not found in client database ({tenant.client_schema}.ship): {hint!r}. "
+            "Check Vessel Name / IMO on the form against the ship register."
+        ]
+    except Exception as e:
+        return [f"Vessel lookup failed for {hint!r}: {e}"]
+    return []
 
 
 def _as_float(val: Any) -> float | None:
