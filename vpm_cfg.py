@@ -1,4 +1,4 @@
-"""Config lookup: process env → GCP Secret Manager / JSON file → missing.
+"""Config lookup: Secret Manager / JSON first, then process env, else missing.
 
 Production (Docker on GCP): set ``VPM_CONFIG_SOURCE=gcp``. The secret payload is a
 flat JSON object (same keys as the old ``.env`` / ``vpm_config.example.json``).
@@ -10,8 +10,9 @@ Default secret::
 Override with ``VPM_GCP_SECRET`` (full resource or secret id) and optional
 ``VPM_GCP_SECRET_VERSION`` (default ``latest``).
 
-Local: omit ``VPM_CONFIG_SOURCE`` / use ``file`` — loads ``VPM_CONFIG_JSON`` or
-``./vpm_config.json``. Process env always wins per key (Compose ``env_file`` ok).
+Per-key order: config store (GCP secret or local JSON) → process env → default /
+``env variable not set``. Bootstrap keys (``VPM_CONFIG_SOURCE``, ``VPM_GCP_SECRET``,
+…) are always read from process env only.
 """
 
 from __future__ import annotations
@@ -26,6 +27,20 @@ ROOT = Path(__file__).resolve().parent
 
 # VoyagePM agentic agent — DEV secret in project 605301150765
 _DEFAULT_GCP_SECRET = "projects/605301150765/secrets/DEV-VOYAGEPM-AGENTIC-AGENT"
+
+# Never taken from the secret/JSON — used to locate the store itself.
+_BOOTSTRAP_KEYS = frozenset(
+    {
+        "VPM_CONFIG_SOURCE",
+        "VPM_CONFIG_JSON",
+        "VPM_CONFIG_PATH",
+        "VPM_GCP_SECRET",
+        "VPM_GCP_SECRET_VERSION",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCP_PROJECT",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    }
+)
 
 _UNSET: Any = object()
 _data: dict[str, str] | None = None
@@ -166,7 +181,10 @@ def _load_data() -> dict[str, str]:
 
     _data = data
     _source_label = label
-    [vpm_cfg] GCP secret {label} had no keys", file=sys.stderr, flush=True)
+    if data:
+        print(f"[vpm_cfg] loaded {label} ({len(data)} keys)", flush=True)
+    elif source == "gcp":
+        print(f"[vpm_cfg] GCP secret {label} had no keys", file=sys.stderr, flush=True)
     return _data
 
 
@@ -193,18 +211,19 @@ def config_path() -> Path | None:
 
 
 def has(key: str) -> bool:
-    if key in os.environ:
+    if key not in _BOOTSTRAP_KEYS and key in _load_data():
         return True
-    return key in _load_data()
+    return key in os.environ
 
 
 def get(key: str, default: Any = _UNSET) -> str:
-    """Process env if set, else secret/JSON, else default / empty + 'env variable not set'."""
+    """Config store (secret/JSON) if set, else process env, else default / unset msg."""
+    if key not in _BOOTSTRAP_KEYS:
+        data = _load_data()
+        if key in data:
+            return data[key]
     if key in os.environ:
         return os.environ[key]
-    data = _load_data()
-    if key in data:
-        return data[key]
     if default is _UNSET:
         if key not in _warned:
             _warned.add(key)
@@ -214,7 +233,7 @@ def get(key: str, default: Any = _UNSET) -> str:
 
 
 def require(key: str) -> str:
-    """Like get without default; raises if missing from env and config store."""
+    """Like get without default; raises if missing from config store and env."""
     if has(key):
         return get(key, "")
     msg = f"env variable not set: {key}"

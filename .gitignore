@@ -17,3 +17,4 @@ port_weather_out/
 
 # Local deployment config (secrets)
 vpm_config.json
+DEV-VOYAGEPM-AGENTIC-AGENT.json
