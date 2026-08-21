@@ -1,6 +1,9 @@
 steps:
 
-# 1. Build Docker image
+# ============================================================
+# 1. BUILD IMAGE
+# ============================================================
+
 - name: 'gcr.io/cloud-builders/docker'
   id: 'Build Image'
   args:
@@ -9,17 +12,29 @@ steps:
     - 'asia-south1-docker.pkg.dev/$PROJECT_ID/vpm-agents/vpm-agents:latest'
     - '.'
 
-# 2. Push Docker image to Artifact Registry
+
+# ============================================================
+# 2. PUSH IMAGE
+# ============================================================
+
 - name: 'gcr.io/cloud-builders/docker'
   id: 'Push Image'
   args:
     - 'push'
     - 'asia-south1-docker.pkg.dev/$PROJECT_ID/vpm-agents/vpm-agents:latest'
 
-# 3. Deploy to Compute Engine VM
+
+# ============================================================
+# 3. DEPLOY TO VM
+# ============================================================
+
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'Deploy To VM'
   entrypoint: 'bash'
+
+  secretEnv:
+    - 'VPM_ENV_FILE'
+
   args:
     - '-c'
     - |
@@ -27,6 +42,13 @@ steps:
 
       IMAGE="asia-south1-docker.pkg.dev/$PROJECT_ID/vpm-agents/vpm-agents:latest"
 
+      echo "Deploying image:"
+      echo "$${IMAGE}"
+
+      # Create temporary env file inside Cloud Build
+      printf '%s\n' "$$VPM_ENV_FILE" > /workspace/vpm.env
+
+      # Deploy to VM
       gcloud compute ssh dev-voyagepm-agentic-agent \
         --zone=asia-south1-a \
         --project=$PROJECT_ID \
@@ -34,16 +56,43 @@ steps:
         --command="
           set -e
 
-          echo '=== Configure Artifact Registry ==='
-          gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+          echo '=========================================='
+          echo 'Configure Artifact Registry'
+          echo '=========================================='
 
-          echo '=== Pull Image ==='
+          gcloud auth configure-docker \
+            asia-south1-docker.pkg.dev \
+            --quiet
+
+          echo '=========================================='
+          echo 'Pull Docker Image'
+          echo '=========================================='
+
           docker pull $${IMAGE}
 
-          echo '=== Remove Old Containers ==='
-          docker rm -f vpm-ingest vpm-prevoyage-db 2>/dev/null || true
+          echo '=========================================='
+          echo 'Create temporary environment file'
+          echo '=========================================='
 
-          echo '=== Create Volumes ==='
+          cat > /tmp/vpm.env <<'VPMENV'
+$$VPM_ENV_FILE
+VPMENV
+
+          chmod 600 /tmp/vpm.env
+
+          echo '=========================================='
+          echo 'Remove old containers'
+          echo '=========================================='
+
+          docker rm -f \
+            vpm-ingest \
+            vpm-prevoyage-db \
+            2>/dev/null || true
+
+          echo '=========================================='
+          echo 'Create Docker volumes'
+          echo '=========================================='
+
           docker volume create vpm_jobs >/dev/null
           docker volume create vpm_inbox >/dev/null
           docker volume create vpm_noon >/dev/null
@@ -51,18 +100,26 @@ steps:
           docker volume create vpm_reports >/dev/null
           docker volume create vpm_registry >/dev/null
 
-          echo '=== Start PreVoyage DB ==='
+          echo '=========================================='
+          echo 'Start PreVoyage DB'
+          echo '=========================================='
+
           docker run -d \
             --name vpm-prevoyage-db \
             --restart unless-stopped \
+            --env-file /tmp/vpm.env \
             -e VPM_SERVICE=prevoyage_db \
             -v vpm_jobs:/data/jobs \
             $${IMAGE}
 
-          echo '=== Start Ingest ==='
+          echo '=========================================='
+          echo 'Start Ingest'
+          echo '=========================================='
+
           docker run -d \
             --name vpm-ingest \
             --restart unless-stopped \
+            --env-file /tmp/vpm.env \
             -e VPM_SERVICE=ingest \
             -v vpm_jobs:/data/jobs \
             -v vpm_inbox:/data/inbox \
@@ -72,13 +129,56 @@ steps:
             -v vpm_registry:/data/registry \
             $${IMAGE}
 
-          echo '=== Running Containers ==='
+          echo '=========================================='
+          echo 'Remove temporary environment file'
+          echo '=========================================='
+
+          rm -f /tmp/vpm.env
+
+          echo '=========================================='
+          echo 'Container Status'
+          echo '=========================================='
+
           docker ps --filter name=vpm-
 
-          echo '=== Deployment Complete ==='
+          echo '=========================================='
+          echo 'Ingest Logs'
+          echo '=========================================='
+
+          docker logs --tail=20 vpm-ingest || true
+
+          echo '=========================================='
+          echo 'PreVoyage DB Logs'
+          echo '=========================================='
+
+          docker logs --tail=20 vpm-prevoyage-db || true
+
+          echo '=========================================='
+          echo 'DEPLOYMENT COMPLETE'
+          echo '=========================================='
         "
 
+
+# ============================================================
+# 4. AVAILABLE SECRET
+# ============================================================
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/605301150765/secrets/DEV-VOYAGEPM-AGENTIC-AGENT/versions/latest
+      env: 'VPM_ENV_FILE'
+
+
+# ============================================================
+# 5. IMAGE
+# ============================================================
+
 images:
-- 'asia-south1-docker.pkg.dev/$PROJECT_ID/vpm-agents/vpm-agents:latest'
+  - 'asia-south1-docker.pkg.dev/$PROJECT_ID/vpm-agents/vpm-agents:latest'
+
+
+# ============================================================
+# 6. OPTIONS
+# ============================================================
 
 timeout: '1800s'
