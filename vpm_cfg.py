@@ -181,10 +181,7 @@ def _load_data() -> dict[str, str]:
 
     _data = data
     _source_label = label
-    if data:
-        print(f"[vpm_cfg] loaded {label} ({len(data)} keys)", flush=True)
-    elif source == "gcp":
-        print(f"[vpm_cfg] GCP secret {label} had no keys", file=sys.stderr, flush=True)
+    "[vpm_cfg] GCP secret {label} had no keys", file=sys.stderr, flush=True)
     return _data
 
 
