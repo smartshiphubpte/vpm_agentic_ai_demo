@@ -9,9 +9,11 @@ __pycache__/
 .git/
 .cursor/
 
-# Secrets — never bake into the image (.env.example is kept)
-.env
-**/.env
+# Secrets — never bake into the image (.env.example / vpm_config.example.json are kept)
+# .env
+# **/.env
+vpm_config.json
+**/vpm_config.json
 
 # Local runtime outputs (compose mounts these; not part of the app)
 data/

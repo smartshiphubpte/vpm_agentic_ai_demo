@@ -1,7 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
-.env
 data/*.json
 data/*.json.lock
 temp.json
@@ -15,3 +14,6 @@ storm_alerts/
 reports/
 port_weather_out/
 .~lock.*
+
+# Local deployment config (secrets)
+vpm_config.json
