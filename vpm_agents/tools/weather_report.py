@@ -8,22 +8,21 @@ from pathlib import Path
 from typing import Any
 
 from vpm_agents.config import settings
+from vpm_agents.tools.folder_layout import WEATHER_REPORT, voyage_report_dir
 from vpm_agents.tools.geo import initial_bearing_deg, remaining_route, route_length_nm
 from vpm_agents.tools.marine_units import (
     beaufort_from_kn,
     compass_label,
     current_factor_kn,
-    format_latlon_dms,
 )
+from vpm_agents.tools.report_charts import weather_series_charts
+from vpm_agents.tools.report_narrative import compact_wx_facts, llm_section
 from vpm_agents.tools.route_weather import format_track_block
 from vpm_agents.tools.templates import fill_template, write_text_pdf
 
 
-def weather_out_dir(voyage_number: str) -> Path:
-    base = Path(settings.weather_out_dir)
-    out = base / voyage_number
-    out.mkdir(parents=True, exist_ok=True)
-    return out
+def weather_out_dir(voyage_number: str, vessel_id: str = "") -> Path:
+    return voyage_report_dir(Path(settings.reports_out_dir), vessel_id, voyage_number, WEATHER_REPORT)
 
 
 def weather_limits_from(spec: Any | None = None) -> dict[str, float]:
@@ -278,6 +277,51 @@ def _weather_window(rows: list[dict[str, Any]]) -> str:
     return f"as reported, {_fmt_dt(rows[0].get('date_utc'))} – {_fmt_dt(rows[-1].get('date_utc'))}"
 
 
+def _passage_narratives(
+    rows: list[dict[str, Any]],
+    particulars: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> dict[str, str]:
+    facts = compact_wx_facts(
+        rows,
+        extra={"voyage": particulars, "bad_weather_events": events[:12], "event_count": len(events)},
+    )
+    return {
+        "summary_block": llm_section(
+            "Section 1.3 Summary of Reported Data. 4–6 bullets covering route, wind/BF range, "
+            "wave peak, pressure trend, and flagged waypoints.",
+            facts,
+            _summary_bullets(rows, particulars),
+        ),
+        "interpretation_block": llm_section(
+            "Section 2.1 Interpretation of the wind/wave/pressure/current time series. "
+            "3–5 bullets on trend (build vs spike), wind-sea coupling, current help/hinder.",
+            facts,
+            _interpretation_bullets(rows),
+        ),
+        "route_assessment_block": llm_section(
+            "Section 3.1 Route Assessment. 2–4 bullets on corridor vs forecast limits and DTG/CP.",
+            facts,
+            _route_assessment(particulars),
+        ),
+        "precautions_block": llm_section(
+            "Section 3.2 Precautions to be Taken on this Route. 3–6 actionable bullets for Master.",
+            facts,
+            _precautions(events, rows),
+        ),
+        "outlook_block": llm_section(
+            "Section 3.3 Forecast Outlook & Predictions. 2–4 bullets; mention bad-weather windows if any.",
+            facts,
+            _outlook(rows, events),
+        ),
+        "performance_block": llm_section(
+            "Section 3.4 Suggestions for Optimised Vessel Performance. 3–5 bullets on STW/CP/fuel.",
+            facts,
+            _performance(particulars, rows),
+        ),
+    }
+
+
 def _summary_bullets(rows: list[dict[str, Any]], particulars: dict[str, Any]) -> str:
     if not rows:
         return "  • No forecast data available for summary."
@@ -375,7 +419,7 @@ def write_weather_report(
     stamp: str | None = None,
     spec: Any | None = None,
 ) -> tuple[Path, Path]:
-    """Write passage PDF + extended bad_weather json under VPM_WEATHER_OUT_DIR/{voyage}/."""
+    """Write passage PDF + JSON under reports/{imo}/{voyage}/weather_report/."""
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     lim = weather_limits_from(spec)
     events = extract_bad_weather_events(
@@ -386,9 +430,10 @@ def write_weather_report(
     )
     rows = build_passage_weather_rows(track)
     particulars = _voyage_particulars(voyage_rec, track)
-    out_dir = weather_out_dir(voyage_number)
+    out_dir = weather_out_dir(voyage_number, vessel_id)
     generated_at = datetime.now(timezone.utc).isoformat()
-    rec = voyage_rec or {}
+    narratives = _passage_narratives(rows, particulars, events)
+    charts = weather_series_charts(out_dir / "charts", rows, stem=f"passage_{stamp}")
 
     payload: dict[str, Any] = {
         "voyage_number": voyage_number,
@@ -409,17 +454,18 @@ def write_weather_report(
         "passage_weather_rows": rows,
         "weather_window": _weather_window(rows),
         "summary": {
-            "text": _summary_bullets(rows, particulars),
+            "text": narratives["summary_block"],
             "highlight_count": sum(1 for r in rows if r.get("highlight")),
         },
         "advisory": {
-            "interpretation": _interpretation_bullets(rows),
-            "route_assessment": _route_assessment(particulars),
-            "precautions": _precautions(events, rows),
-            "outlook": _outlook(rows, events),
-            "performance": _performance(particulars, rows),
+            "interpretation": narratives["interpretation_block"],
+            "route_assessment": narratives["route_assessment_block"],
+            "precautions": narratives["precautions_block"],
+            "outlook": narratives["outlook_block"],
+            "performance": narratives["performance_block"],
         },
         "legacy_weather_block": format_track_block(track),
+        "chart_files": [str(p) for p in charts],
     }
     json_path = out_dir / f"bad_weather_{stamp}.json"
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -450,12 +496,12 @@ def write_weather_report(
         "weather_window": payload["weather_window"],
         "passage_weather_table": format_passage_weather_table(rows),
         "highlight_note": "  * Highlighted rows: BF ≥ 5 and/or significant wave height ≥ 1.0 m",
-        "summary_block": payload["summary"]["text"],
-        "interpretation_block": payload["advisory"]["interpretation"],
-        "route_assessment_block": payload["advisory"]["route_assessment"],
-        "precautions_block": payload["advisory"]["precautions"],
-        "outlook_block": payload["advisory"]["outlook"],
-        "performance_block": payload["advisory"]["performance"],
+        "summary_block": narratives["summary_block"],
+        "interpretation_block": narratives["interpretation_block"],
+        "route_assessment_block": narratives["route_assessment_block"],
+        "precautions_block": narratives["precautions_block"],
+        "outlook_block": narratives["outlook_block"],
+        "performance_block": narratives["performance_block"],
         "weather_block": payload["legacy_weather_block"],
         "hard_block": format_bad_weather_block(events),
         "bad_weather_block": format_bad_weather_block(events),
@@ -465,7 +511,15 @@ def write_weather_report(
         "swell_limit_m": lim["max_swell_m"],
     }
     body = _fill_passage_template("passage_weather_report.txt", ctx)
-    pdf_path = write_text_pdf(out_dir, f"weather_report_{stamp}.pdf", body)
+    (out_dir / f"weather_report_{stamp}.txt").write_text(body, encoding="utf-8")
+    pdf_path = write_text_pdf(
+        out_dir,
+        f"weather_report_{stamp}.pdf",
+        body,
+        voyage_number=voyage_number,
+        for_send=True,
+        images=charts,
+    )
     return pdf_path, json_path
 
 
@@ -525,4 +579,10 @@ if __name__ == "__main__":
     pdf_path, json_path = write_weather_report("SELFTEST", sample, plan_label="self-check")
     assert pdf_path.suffix == ".pdf" and pdf_path.stat().st_size > 500
     assert json_path.is_file()
+    txt = json_path.with_name(json_path.name.replace("bad_weather_", "weather_report_")).with_suffix(".txt")
+    body = txt.read_text(encoding="utf-8")
+    assert "Passage Weather Report" in body
+    assert "1. Voyage Particulars" in body
+    assert "2. Graphical Weather Analysis" in body
+    assert "3. Route Advisory" in body
     print("weather_report self-check ok")

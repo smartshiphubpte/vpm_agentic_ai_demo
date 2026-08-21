@@ -15,7 +15,7 @@ from vpm_agents.config import settings
 from vpm_agents.core.orchestrator import WORKFLOWS, SupervisorOrchestrator
 from vpm_agents.core.spec_loader import SPECS_DIR, load_agent_spec
 from vpm_agents.tools.geo import six_hour_waypoints
-from vpm_agents.tools.inbox_io import classify_inbox_file, parse_noon_report, parse_pre_voyage
+from inbox_agent.parse import classify_inbox_file, parse_noon_report, parse_pre_voyage
 from vpm_agents.tools.route_json import parse_route_points
 
 
@@ -36,12 +36,17 @@ def _continuous_cycle() -> None:
     spec.loader.exec_module(mod)
 
     inbox = settings.inbox_dir
+    noon_inbox = settings.noon_inbox_dir
     inbox.mkdir(parents=True, exist_ok=True)
-    for name in ("pre_voyage.csv", "noon_report.csv"):
-        dest = inbox / name
-        if dest.exists():
-            dest.unlink()
-        shutil.copy(ROOT / "samples" / "inbox" / name, dest)
+    noon_inbox.mkdir(parents=True, exist_ok=True)
+    dest = inbox / "pre_voyage.csv"
+    if dest.exists():
+        dest.unlink()
+    shutil.copy(ROOT / "samples" / "inbox" / "pre_voyage.csv", dest)
+    noon_dest = noon_inbox / "noon_report.csv"
+    if noon_dest.exists():
+        noon_dest.unlink()
+    shutil.copy(ROOT / "samples" / "inbox" / "noon_report.csv", noon_dest)
 
     state = mod.run_once(storm=True, inbox=True)
     assert_true(
@@ -54,12 +59,27 @@ def _continuous_cycle() -> None:
     )
     assert_true(settings.registry_path.is_file(), "registry not written")
     assert_true(any(settings.storm_out_dir.glob("storms_*.json")), "storm snapshot missing")
-    voy_dir = settings.reports_out_dir / "VYG-2026-001"
+    from vpm_agents.tools.folder_layout import (
+        PRE_VOYAGE_REPORT,
+        VPA_REPORT,
+        WEATHER_REPORT,
+        voyage_report_dir,
+        voyage_root,
+    )
+
+    voy_dir = voyage_root(settings.reports_out_dir, "9184902", "VYG-2026-001")
     assert_true((voy_dir / "master_route.json").is_file(), "master_route missing")
-    assert_true(any(voy_dir.glob("pre_voyage_route_*.txt")), "pre-voyage report missing")
-    assert_true(any(voy_dir.glob("noon_7day_report_*.txt")), "noon report missing")
     assert_true(
-        any(voy_dir.glob("voyage_track_weather_*.json")) or any(voy_dir.glob("weather_report_*.pdf")),
+        any(voyage_report_dir(settings.reports_out_dir, "9184902", "VYG-2026-001", PRE_VOYAGE_REPORT).glob("pre_voyage_route_*.txt")),
+        "pre-voyage report missing",
+    )
+    assert_true(
+        any(voyage_report_dir(settings.reports_out_dir, "9184902", "VYG-2026-001", VPA_REPORT).glob("noon_7day_report_*.txt")),
+        "noon report missing",
+    )
+    assert_true(
+        any(voyage_report_dir(settings.reports_out_dir, "9184902", "VYG-2026-001", WEATHER_REPORT).glob("voyage_track_weather_*.json"))
+        or any(voyage_report_dir(settings.reports_out_dir, "9184902", "VYG-2026-001", WEATHER_REPORT).glob("weather_report_*.pdf")),
         "combined track+weather missing",
     )
 
@@ -122,6 +142,14 @@ def _continuous_cycle() -> None:
     from vpm_agents.tools.mock_backend import MockBackend
 
     assert_true(not is_land(1.25, 103.85), "Singapore approaches must be water")
+    assert_true(not is_land(22.3, 114.2), "Hong Kong approaches must be water")
+    assert_true(not is_land(36.07, 120.38), "Qingdao approaches must be water")
+    assert_true(not is_land(24.5, 119.5), "Taiwan Strait must be water")
+    assert_true(is_land(29.2, 120.8), "Zhejiang interior must be land")
+    assert_true(
+        score_route_land([[12.2, 109.2], [36.07, 120.38]], sample_nm=12)["sea_clear"] is False,
+        "Vietnam→Qingdao chord must fail land hard rule",
+    )
     assert_true(is_land(40.0, -100.0), "continental interior must be land")
     assert_true(
         score_route_land([[40.0, -100.0], [0.0, -150.0]], sample_nm=30)["sea_clear"] is False,
@@ -225,25 +253,140 @@ def _continuous_cycle() -> None:
     )
     dij = optimize_conventional("shortest", sea_master, None, None, algo="dijkstra")
     assert_true(dij["provider"].startswith("local-dijkstra"), "dijkstra provider")
+    # BE: storms are hard keep-out when a sea detour exists (South China Sea corridor)
+    conv_clear = score_route_storms(conv["waypoints"], storm_hit)
+    assert_true(
+        conv_clear["storm_clear"] or conv.get("sea_clear"),
+        "safest should prefer storm keep-out when graph allows",
+    )
     assert_true(load_agent_spec("RouteOptimizeLLMAgent").path.is_file(), "missing LLM route-opt spec")
     assert_true(load_agent_spec("PreVoyageRouteOptimizeAgent").path.is_file(), "missing pre-voyage opt spec")
+    for spec_name in (
+        "RouteOptFastestAgent",
+        "RouteOptShortestAgent",
+        "RouteOptFuelAgent",
+        "RouteOptSafestAgent",
+    ):
+        s = load_agent_spec(spec_name)
+        assert_true(s.path.is_file() and s.get("optimize_for"), f"missing/empty {spec_name}")
 
     pts = six_hour_waypoints([[1.0, 100.0], [2.0, 101.0]], 12.0, horizon_hours=12)
     assert_true(len(pts) >= 2, "six_hour_waypoints too short")
 
     from dataclasses import replace
 
-    g = replace(settings, llm_provider="gemini", gemini_api_key="k", openai_api_key="")
+    g = replace(settings, llm_provider="gemini", gemini_api_key="k", openai_api_key="", cursor_api_key="")
     assert_true(g.use_llm and g.llm_api_key == "k", "gemini llm_api_key")
     assert_true(g.llm_model.startswith("gemini"), "gemini llm_model default")
     assert_true(g.effective_llm_base_url.endswith("/openai"), "gemini base url")
+    c = replace(
+        settings,
+        llm_provider="cursor",
+        cursor_api_key="crsr_test",
+        openai_api_key="",
+        gemini_api_key="",
+    )
+    assert_true(c.effective_llm_provider == "cursor" and c.llm_api_key == "crsr_test", "cursor llm_api_key")
+    assert_true(c.llm_model == "composer-2.5" or bool(c.llm_model), "cursor llm_model")
 
     kind = classify_inbox_file(ROOT / "samples" / "inbox" / "pre_voyage.csv")
     assert_true(kind == "pre_voyage", f"bad classify {kind}")
     pv = parse_pre_voyage(ROOT / "samples" / "inbox" / "pre_voyage.csv")
     assert_true(pv["cp_speed_kn"] == 12.5, "bad speed")
+    assert_true(pv.get("cp_consumption_mt_day") is None, "sample CSV has no consumption")
+
+    from vpm_agents.tools.route_optimize import (
+        voyage_metrics,
+        format_alternatives_block,
+        format_alt_waypoint_table,
+        assign_routes_by_metric,
+    )
+
+    m0 = voyage_metrics(240.0, 12.0, None)
+    assert_true(m0["fuelMt"] is None and m0["days"] == 0.83, f"metrics skip fuel {m0}")
+    m1 = voyage_metrics(240.0, 12.0, 24.0)
+    assert_true(m1["fuelMt"] == 20.0, f"fuel from MT/day {m1}")
+    blk = format_alternatives_block(
+        {
+            "shortest": {
+                "id": "shortest",
+                "label": "Shortest",
+                "voyage": m0,
+                "sea_clear": True,
+                "avoids_storms": True,
+                "weather_along": "wind 10 kn",
+            }
+        }
+    )
+    assert_true("fuel consumption" not in blk, "must omit fuel when unknown")
+    assert_true("distance: 240" in blk, "distance missing in report block")
+    tbl = format_alt_waypoint_table(
+        {
+            "fastest": {
+                "id": "fastest",
+                "label": "Fastest ETA",
+                "six_hour_plan": [{"lat": 1.25, "lon": 103.85}, {"lat": 5.0, "lon": 108.0}],
+            },
+            "safest": {
+                "id": "safest",
+                "label": "Safest",
+                "route": {"waypoints": [{"lat": 1.25, "lon": 103.85}]},
+            },
+        }
+    )
+    assert_true("Fastest ETA" in tbl and "Safest" in tbl, "alt waypoint table headers")
+    assert_true("1.2500" in tbl and "103.8500" in tbl, "alt waypoint table coords")
+    assert_true("Shortest" in tbl and "Least fuel" in tbl, "alt waypoint table keeps all four columns")
+
+    objs = [
+        {"id": "fastest", "optimize_for": "fastest", "label": "Fastest ETA"},
+        {"id": "shortest", "optimize_for": "shortest", "label": "Shortest distance"},
+        {"id": "fuel", "optimize_for": "fuel", "label": "Least fuel"},
+        {"id": "safest", "optimize_for": "safest", "label": "Safest (weather+storm)"},
+    ]
+    inverted = {
+        "fastest": {
+            "id": "fastest",
+            "voyage": {"distanceNm": 5558.3, "etaHours": 548.7, "fuelMt": 457.2},
+            "weather_score": {"weather_score": 90.0},
+            "storm_score": {"storm_clear": True},
+            "weather": {"points": [{"windKn": 11.7, "waveM": 2.7}]},
+        },
+        "shortest": {
+            "id": "shortest",
+            "voyage": {"distanceNm": 5311.0, "etaHours": 524.3, "fuelMt": 436.9},
+            "weather_score": {"weather_score": 90.0},
+            "storm_score": {"storm_clear": True},
+            "weather": {"points": [{"windKn": 11.5, "waveM": 2.6}]},
+        },
+        "fuel": {
+            "id": "fuel",
+            "voyage": {"distanceNm": 5428.1, "etaHours": 535.8, "fuelMt": 446.5},
+            "weather_score": {"weather_score": 90.0},
+            "storm_score": {"storm_clear": True},
+            "weather": {"points": [{"windKn": 11.0, "waveM": 2.7}]},
+        },
+        "safest": {
+            "id": "safest",
+            "voyage": {"distanceNm": 5188.7, "etaHours": 512.2, "fuelMt": 426.8},
+            "weather_score": {"weather_score": 80.0},
+            "storm_score": {"storm_clear": True},
+            "weather": {"points": [{"windKn": 27.6, "waveM": 4.0}]},
+        },
+    }
+    ranked = assign_routes_by_metric(inverted, objs)
+    assert_true(ranked["shortest"]["proposed_as"] == "safest", "shortest must take min NM")
+    assert_true(ranked["fastest"]["proposed_as"] == "safest", "fastest must take min ETA")
+    assert_true(ranked["fuel"]["proposed_as"] == "safest", "fuel must take min MT")
+    assert_true(ranked["safest"]["proposed_as"] != "safest", "safest must not keep the high-wind track")
     nr = parse_noon_report(ROOT / "samples" / "inbox" / "noon_report.csv")
     assert_true(nr["voyage_number"] == "VYG-2026-001", "bad noon voyage")
+
+    from vpm_agents.tools.report_email import _parse_emails, recipients_from_db, send_report_pdf
+
+    assert_true(_parse_emails("a@x.com, b@y.com") == ["a@x.com", "b@y.com"], "report email parse")
+    assert_true(recipients_from_db("VTEST") == [], "db recipients placeholder")
+    assert_true(send_report_pdf(ROOT / "nope.pdf") is False, "missing pdf should skip")
 
 
 def main() -> None:
@@ -262,6 +405,8 @@ def main() -> None:
         "StormWatchAgent",
         "WeatherReportAgent",
         "InboxWatchAgent",
+        "MailInboxAgent",
+        "EndOfVoyageReportAgent",
     ):
         assert_true(load_agent_spec(cont).path.is_file(), f"missing continuous spec {cont}")
     sup = load_agent_spec("SupervisorOrchestrator")

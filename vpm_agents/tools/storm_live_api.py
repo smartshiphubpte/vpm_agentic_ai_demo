@@ -87,7 +87,7 @@ def fetch_live_storms() -> list[dict[str, Any]]:
     return out
 
 
-def _http_get_text(url: str, timeout: float = 30.0) -> str:
+def _http_get_text(url: str, timeout: float = 120.0) -> str:
     headers = {"User-Agent": _UA, "Accept": "*/*"}
     try:
         with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers) as client:

@@ -48,6 +48,7 @@ class MockBackend:
             },
         }
         self.sessions: dict[str, dict] = {}
+        self._eov_noon_cache: dict[str, list] = {}
         self.vessels = {
             "orion": [
                 {
@@ -264,6 +265,9 @@ class MockBackend:
         waypoints: list,
         weather: dict | None = None,
         storms: list | None = None,
+        *,
+        speed_kn: float | None = None,
+        fuel_mt_day: float | None = None,
     ) -> dict:
         self._sess(token)
         base = deepcopy(waypoints) or [{"lat": 1.25, "lon": 103.85}, {"lat": 22.3, "lon": 114.2}]
@@ -288,14 +292,18 @@ class MockBackend:
             lat, lon = nudge_off_land(lat, lon)
             out.append({"lat": round(lat, 4), "lon": round(lon, 4), "seq": i})
         dist = sum(_haversine_nm(out[i], out[i + 1]) for i in range(len(out) - 1)) if len(out) > 1 else 0
-        fuel = round(dist * (0.18 if "fuel" in objective or objective == "lowest-fuel" else 0.22), 1)
-        eta_h = round(dist / (14.5 if objective == "fastest" else 12.0), 1)
+        sog = float(speed_kn) if speed_kn else 12.0
+        eta_h = round(dist / max(sog, 0.1), 1)
+        fuel = (
+            round(eta_h / 24.0 * float(fuel_mt_day), 1) if fuel_mt_day is not None else None
+        )
         return {
             "objective": objective,
             "waypoints": out,
             "distanceNm": round(dist, 1),
             "fuelMt": fuel,
             "etaHours": eta_h,
+            "days": round(eta_h / 24.0, 2),
             "weatherAware": bool(weather),
             "stormAware": bool(storms),
             "provider": f"vo-{objective}-mock",
@@ -499,6 +507,89 @@ class MockBackend:
             "cii": cii,
             "savingsMt": round(cii["fuelMt"] * 0.04, 1),
         }
+
+    def compute_eov_report(
+        self,
+        token: str,
+        *,
+        vessel_id: str,
+        voyage_number: str,
+        cp_speed: float = 0,
+        cp_cons: float = 0,
+        bf: float | None = 4,
+        wv: float | None = 5,
+    ) -> dict:
+        """Mock full EOV pack — delegates to local formula engine."""
+        _ = (token, vessel_id, bf, wv)
+        from vpm_agents.tools.eov_compute import compute_eov_report, good_weather_filter
+
+        rows = list(self._eov_noon_cache.get(voyage_number) or [])
+        if not rows:
+            # Minimal synthetic passage so PDF paths still exercise
+            rows = [
+                {
+                    "reporttype": "Departure Report",
+                    "utcTime": "2025-06-05T10:00:00Z",
+                    "lat": 13.1,
+                    "lon": 100.8,
+                    "noonreportdata": {
+                        "ME_Running_Hrs": 0,
+                        "Distance": 0,
+                        "Distance_Covered_Since_SOV": 0,
+                        "Remaining_On_Board_HFO_In_MT": 2100,
+                        "Remaining_On_Board_LSMGO_In_MT": 50,
+                    },
+                },
+                {
+                    "reporttype": "Noon Report",
+                    "utcTime": "2025-06-06T04:00:00Z",
+                    "lat": 14.0,
+                    "lon": 105.0,
+                    "noonreportdata": {
+                        "ME_Running_Hrs": 24,
+                        "Distance": 260,
+                        "Distance_Covered_Since_SOV": 260,
+                        "Avg_Speed": 10.8,
+                        "ME_RPM": 70,
+                        "Slip": 24,
+                        "Wind_Force": 3,
+                        "Sea_Height": 0.5,
+                        "Total_HFOME_Consumed_In_MT": 22,
+                        "Total_HFOAE_Consumed_In_MT": 1,
+                        "Total_LSMGO_Consumed_In_MT": 0.1,
+                        "Remaining_On_Board_HFO_In_MT": 2077,
+                        "Remaining_On_Board_LSMGO_In_MT": 49.9,
+                    },
+                },
+                {
+                    "reporttype": "Arrival Report",
+                    "utcTime": "2025-06-07T17:00:00Z",
+                    "lat": 22.0,
+                    "lon": 113.5,
+                    "noonreportdata": {
+                        "ME_Running_Hrs": 37,
+                        "Distance": 400,
+                        "Distance_Covered_Since_SOV": 660,
+                        "Avg_Speed": 10.8,
+                        "ME_RPM": 69,
+                        "Slip": 25,
+                        "Wind_Force": 4,
+                        "Sea_Height": 0.9,
+                        "Total_HFOME_Consumed_In_MT": 34,
+                        "Total_HFOAE_Consumed_In_MT": 2,
+                        "Total_LSMGO_Consumed_In_MT": 0.3,
+                        "Remaining_On_Board_HFO_In_MT": 2041,
+                        "Remaining_On_Board_LSMGO_In_MT": 49.6,
+                    },
+                },
+            ]
+        gw = good_weather_filter(rows, bf_limit=float(bf or 4), wave_limit=float(wv or 5))
+        return compute_eov_report(
+            rows,
+            cp_speed=float(cp_speed or 11.5),
+            cp_cons=float(cp_cons or 24.0),
+            good_weather_reports=gw,
+        )
 
     def voyage_performance(self, token: str, voyage_id: str) -> dict:
         eov = self.compute_eov(token, voyage_id)

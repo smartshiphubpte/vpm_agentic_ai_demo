@@ -1,0 +1,47 @@
+Demo: Ingestion to Report Email (Simple Outline)
+================================================
+
+Goal
+- Show the working flow from file drop → ingest → database/registry → PDF report → email.
+
+Services to run
+- ingest          (required)
+- report-sender   (required)
+- prevoyage_db    (optional — for DB persistence demo)
+
+Do NOT run for this demo
+- weather
+- routeopt
+- storm
+- port-weather
+
+Demo steps
+1) Set VPM_DAEMON_FLOW=noon_monitoring in .env
+2) Configure SMTP + VPM_REPORT_SENDER_REVIEW_EMAIL
+3) Start: docker compose up ingest report-sender prevoyage-db
+4) Drop file: cp samples/inbox/pre_voyage.csv → $VPM_INBOX_DIR/incoming/
+5) Watch ingest log — file parsed, registry updated, PDF written
+6) Watch report-sender log — PDF emailed, moved to sent/
+7) (Optional) Confirm voyage row in Postgres via prevoyage_db
+
+What happens automatically
+- Inbox file is classified and parsed
+- Voyage is registered in local JSON registry
+- Pre-voyage route report is generated as PDF
+- PDF is picked up from reports/.../incoming/
+- PDF is emailed and archived to sent/
+- Inbox file is moved to processed/
+- (Optional) Voyage + master route written to Postgres
+
+What to show management
+- Drop folder → processed folder (file was consumed)
+- reports/.../pre_voyage_report/incoming/ → sent/ (report was generated and delivered)
+- Registry JSON updated with voyage details
+- Email received in review inbox
+- (Optional) DB row created
+
+Out of scope
+- Weather picking / passage weather reports
+- Route optimization / alternate routes
+- Storm monitoring
+- Port weather while in port

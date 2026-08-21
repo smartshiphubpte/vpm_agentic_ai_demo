@@ -1,0 +1,45 @@
+END OF VOYAGE REPORT
+{vessel_name} | Voyage {voyage_number} | {source_port} → {dest_port}
+Prepared Basis: Budgeted Consumptions
+Generated: {generated_at}
+
+════════════════════════════════════════════════════════════════════════
+COVER METRICS
+  Distance sailed     {distance_nm} NM
+  Time at sea         {time_hrs} hrs
+  Average speed       {avg_speed_kn} kts
+  Avg RPM             {avg_rpm}
+
+════════════════════════════════════════════════════════════════════════
+EXECUTIVE SUMMARY
+{executive_summary}
+
+════════════════════════════════════════════════════════════════════════
+OVERALL VOYAGE DETAILS
+{overall_table}
+
+{overall_narrative}
+
+════════════════════════════════════════════════════════════════════════
+TIME & BUNKER ANALYSIS
+{bunker_block}
+
+════════════════════════════════════════════════════════════════════════
+NOON REPORT ANALYSIS
+{noon_table}
+
+════════════════════════════════════════════════════════════════════════
+GOOD WEATHER SUMMARY
+{good_weather_block}
+
+════════════════════════════════════════════════════════════════════════
+PERFORMANCE CURVES / VOYAGE MAP
+  See PDF chart pages (eov_assets/).
+
+════════════════════════════════════════════════════════════════════════
+FORMULATIONS
+{formulations_block}
+
+════════════════════════════════════════════════════════════════════════
+APPENDIX — ALERTS
+{appendix_block}

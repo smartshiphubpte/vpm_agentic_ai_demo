@@ -1,0 +1,59 @@
+How the report sender works
+===========================
+
+The report-sender service emails finished PDF reports. It does not generate them.
+Agents write each report from a type-specific template, store the PDF in Google
+Storage, and leave a pending row in the database. The sender then picks that up
+and mails it.
+
+1. Pending row in the database
+   The service polls Postgres (vpm_report) for rows that have not been sent yet
+   (sent is null, status is null). Each row has a report_link pointing at the
+   PDF in Google Storage (gs://… or an HTTPS storage URL).
+
+2. Download from Google Storage
+   It fetches the PDF from that link to a local temp file.
+
+3. Categorize the PDF type
+   From the file name it decides the type (passage weather, pre-departure,
+   storm alert, port weather, end of voyage). Each type has an email-body
+   draft under templates/ (email_passage_weather.txt, email_pre_departure.txt,
+   email_storm_alert.txt, email_port_weather.txt, email_end_of_voyage.txt).
+   Placeholders such as {voyage_number}, {vessel_name}, {timestamp},
+   {recipients} are filled from the voyage registry and, when configured,
+   from Postgres (voyages + vpm_voyage_email).
+
+4. Who receives it
+   Recipients come from the database (vpm_voyage_email): look up the voyage
+   number and take the stored email address(es). That is who the report goes to.
+
+5. Send the email
+   An SMTP message is sent with that type-specific body and the PDF attached.
+   After a successful send the vpm_report row is marked sent=true so it is not
+   mailed again.
+
+Flow chart 
+------------------------
+Starts at the database. Read top to bottom.
+
+  1. Database row: "this PDF is waiting to be sent"
+           |
+           v
+  2. Report sender finds that waiting row
+           |
+           v
+  3. Download the PDF from Google Storage
+           |
+           v
+  4. Categorize the PDF type. Adapt the email body to that report type
+           |
+           v
+  5. Database: who should get this voyage's report?
+           |
+           v
+  6. Email them. Body matches the type. PDF is attached
+           |
+           v
+  7. Mark the row sent. Stop. Do not mail it twice.
+
+

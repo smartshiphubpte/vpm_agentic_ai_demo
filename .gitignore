@@ -3,10 +3,15 @@ __pycache__/
 *.pyc
 .env
 data/*.json
+data/*.json.lock
+temp.json
+data/jobs/
 .pytest_cache/
 *.egg-info/
 inbox/
+noon_inbox/
 !samples/inbox/
 storm_alerts/
 reports/
+port_weather_out/
 .~lock.*

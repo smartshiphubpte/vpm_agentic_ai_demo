@@ -1,0 +1,12 @@
+Subject: End of Voyage Report — {vessel_name} | Voyage {voyage_number}
+
+To: {recipients}
+
+Please find attached the end-of-voyage report for {vessel_name} (voyage {voyage_number}).
+
+Route: {route_line}
+Generated: {timestamp}
+
+The PDF is attached for review.
+
+— VoyagePM

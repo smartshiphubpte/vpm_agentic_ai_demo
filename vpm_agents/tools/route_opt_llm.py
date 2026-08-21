@@ -19,6 +19,13 @@ from vpm_agents.tools.route_opt_conventional import optimize_conventional
 from vpm_agents.tools.storm_normalize import normalize_active_storms
 
 _SPEC_NAME = "RouteOptimizeLLMAgent"
+_SPEC_BY_OBJECTIVE = {
+    "fastest": "RouteOptFastestAgent",
+    "shortest": "RouteOptShortestAgent",
+    "fuel": "RouteOptFuelAgent",
+    "lowest-fuel": "RouteOptFuelAgent",
+    "safest": "RouteOptSafestAgent",
+}
 _JSON_OBJ = re.compile(r"\{.*\}", re.DOTALL)
 
 
@@ -36,10 +43,12 @@ def _as_pts(waypoints: list) -> list[dict[str, float]]:
     return out
 
 
-def _system_prompt() -> str:
-    spec = load_agent_spec(_SPEC_NAME)
-    # Full MD is the agent brief (role + hard rules + schema).
-    return spec.body.strip()
+def _system_prompt(objective: str) -> str:
+    """Specialist MD is the acting brief; shared LLM spec supplies the JSON schema."""
+    name = _SPEC_BY_OBJECTIVE.get((objective or "").lower(), _SPEC_NAME)
+    specialist = load_agent_spec(name).body.strip()
+    shared = load_agent_spec(_SPEC_NAME).body.strip()
+    return specialist + "\n\n---\n\n" + shared
 
 
 def _compact_storms(storms: list[dict]) -> list[dict]:
@@ -162,7 +171,8 @@ def optimize_llm(
 
     from vpm_agents.tools.weather_report import weather_limits_from
 
-    llm_spec = load_agent_spec(_SPEC_NAME)
+    spec_name = _SPEC_BY_OBJECTIVE.get((objective or "").lower(), _SPEC_NAME)
+    llm_spec = load_agent_spec(spec_name)
     wx_lim = weather_limits_from()
     user_payload = {
         "optimize_for": objective,
@@ -184,7 +194,7 @@ def optimize_llm(
 
     text, chat_err = chat_detail(
         [
-            {"role": "system", "content": _system_prompt()},
+            {"role": "system", "content": _system_prompt(objective)},
             {
                 "role": "user",
                 "content": (

@@ -8,8 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from vpm_agents.config import settings
+from vpm_agents.tools.folder_layout import WEATHER_REPORT, voyage_report_dir
 from vpm_agents.tools.geo import haversine_nm, initial_bearing_deg
 from vpm_agents.tools.marine_units import beaufort_from_kn, compass_label, format_latlon_dms
+from vpm_agents.tools.report_charts import cyclone_charts
+from vpm_agents.tools.report_narrative import llm_section
 from vpm_agents.tools.route_json import parse_route_points
 from vpm_agents.tools.templates import fill_template, write_report
 
@@ -115,6 +118,77 @@ def _recommended_actions(cpa_nm: float, wx: dict[str, Any], center_buffer: float
     return "\n".join(f"  • {a}" for a in actions)
 
 
+def _proximity_series(
+    route: list[list[float]], storm: dict[str, Any], fallback_lat: float, fallback_lon: float
+) -> tuple[list[str], list[float]]:
+    positions = storm.get("positions") or [{"lat": fallback_lat, "lon": fallback_lon, "valid_time": ""}]
+    labels: list[str] = []
+    dists: list[float] = []
+    for i, pos in enumerate(positions):
+        lat, lon = pos.get("lat"), pos.get("lon")
+        if lat is None or lon is None:
+            continue
+        if route:
+            _, _, d = _nearest_route_point(route, float(lat), float(lon))
+        else:
+            d = haversine_nm(fallback_lat, fallback_lon, float(lat), float(lon))
+        t = pos.get("valid_time") or pos.get("validAtIso") or str(i)
+        labels.append(str(t)[5:16] if "T" in str(t) else str(t)[:12])
+        dists.append(round(float(d), 1))
+    return labels, dists
+
+
+def _cyclone_narratives(
+    voyage_number: str,
+    voyage_rec: dict[str, Any],
+    storm: dict[str, Any],
+    wx: dict[str, Any],
+    cpa_nm: float,
+    center_buffer: float,
+    wp_label: str,
+    pos_dms: str,
+) -> dict[str, str]:
+    fallback_syn = _synopsis(voyage_number, voyage_rec, storm, wp_label, pos_dms, wx, cpa_nm)
+    fallback_act = _recommended_actions(cpa_nm, wx, center_buffer)
+    facts = {
+        "voyage": voyage_number,
+        "route": f"{voyage_rec.get('source_port')} → {voyage_rec.get('dest_port')}",
+        "storm": {
+            "id": storm.get("id"),
+            "name": storm.get("name"),
+            "category": storm.get("category") or storm.get("status"),
+            "radius_nm": storm.get("radius_nm"),
+        },
+        "cpa_nm": round(cpa_nm, 1),
+        "center_buffer_nm": center_buffer,
+        "nearest_fix": {
+            "waypoint": wp_label,
+            "position": pos_dms,
+            "wind_kn": wx.get("windKn"),
+            "wave_m": wx.get("waveM"),
+            "swell_m": wx.get("swellM"),
+            "valid_time": wx.get("validTime"),
+        },
+    }
+    return {
+        "synopsis_block": llm_section(
+            "Write the SYSTEM SUMMARY Synopsis paragraph (4–8 sentences). No heading.",
+            facts,
+            fallback_syn,
+        ),
+        "outlook_block": llm_section(
+            "Outlook & Confidence: 3–5 bullets on track uncertainty, CPA trend, and watchkeeping.",
+            facts,
+            "  • Monitor routing tool for updated fixes while the system remains active.",
+        ),
+        "recommended_actions_block": llm_section(
+            "Recommended Actions for Master / Route Planner. 4–7 numbered or bulleted actions.",
+            facts,
+            fallback_act,
+        ),
+    }
+
+
 def write_storm_voyage_report(
     voyage_number: str,
     voyage_rec: dict[str, Any],
@@ -128,8 +202,12 @@ def write_storm_voyage_report(
     """Write per-voyage cyclone txt + json; keeps storm snapshot fields in json payload."""
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     generated_at = datetime.now(timezone.utc).isoformat()
-    out_dir = storm_out_dir() / voyage_number
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = voyage_report_dir(
+        settings.reports_out_dir,
+        str(voyage_rec.get("vessel_id") or ""),
+        voyage_number,
+        WEATHER_REPORT,
+    )
 
     route = parse_route_points(
         voyage_rec.get("noon_seven_day_plan")
@@ -148,9 +226,21 @@ def write_storm_voyage_report(
     wp_label = f"Waypoint {seq}"
 
     ref_table, ref_rows = _reference_table(storm_lat, storm_lon, voyage_rec)
-    synopsis = _synopsis(voyage_number, voyage_rec, storm, wp_label, pos_dms, wx, cpa_nm)
     center_buffer = hit.get("center_buffer_nm") or settings.storm_center_buffer_nm
     edge_buffer = hit.get("edge_buffer_nm") or settings.storm_edge_buffer_nm
+    narratives = _cyclone_narratives(
+        voyage_number, voyage_rec, storm, wx, cpa_nm, center_buffer, wp_label, pos_dms
+    )
+    prox_labels, prox_nm = _proximity_series(route, storm, storm_lat, storm_lon)
+    charts = cyclone_charts(
+        out_dir / "charts",
+        wind_kn=float(wind_kn) if wind_kn is not None else None,
+        wave_m=wx.get("waveM"),
+        swell_m=wx.get("swellM"),
+        proximity_labels=prox_labels,
+        proximity_nm=prox_nm,
+        stem=f"cyclone_{stamp}",
+    )
     suggested = voyage_rec.get("suggested_route") or voyage_rec.get("optimized_routes") or {}
     safest_note = "See route_alternatives / optimized_routes in voyage registry"
     if isinstance(suggested, dict) and suggested.get("safest"):
@@ -171,7 +261,11 @@ def write_storm_voyage_report(
         "cpa_nm": round(cpa_nm, 1),
         "nearest_waypoint": {"seq": seq, "lat": pt[0], "lon": pt[1], "weather": wx},
         "reference_locations": ref_rows,
-        "synopsis": synopsis,
+        "synopsis": narratives["synopsis_block"],
+        "outlook": narratives["outlook_block"],
+        "recommended_actions": narratives["recommended_actions_block"],
+        "proximity_nm": prox_nm,
+        "chart_files": [str(p) for p in charts],
         "storm_source": storm_source,
         "storm_hit": {k: v for k, v in hit.items() if k != "voyage_rec"},
         "storm": {
@@ -218,10 +312,10 @@ def write_storm_voyage_report(
         "current_dir_deg": wx.get("currentDirDeg") or "—",
         "fix_timestamp": wx.get("validTime") or "—",
         "cpa_nm": f"{cpa_nm:.0f}",
-        "synopsis_block": synopsis,
+        "synopsis_block": narratives["synopsis_block"],
         "reference_locations_table": ref_table,
-        "outlook_block": "  • Monitor routing tool for updated fixes while the system remains active.",
-        "recommended_actions_block": _recommended_actions(cpa_nm, wx, center_buffer),
+        "outlook_block": narratives["outlook_block"],
+        "recommended_actions_block": narratives["recommended_actions_block"],
         "safest_route_note": safest_note,
         "storm_source": storm_source or settings.storm_source,
     }
@@ -230,7 +324,14 @@ def write_storm_voyage_report(
         body = fill_template("tropical_cyclone_alert_report.txt", ctx)
     except FileNotFoundError:
         body = fill_template("storm_alert.txt", ctx)
-    txt_path = write_report(out_dir, f"cyclone_alert_{stamp}.txt", body)
+    txt_path = write_report(
+        out_dir,
+        f"cyclone_alert_{stamp}.txt",
+        body,
+        email_pdf=True,
+        voyage_number=voyage_number,
+        pdf_images=charts,
+    )
     return txt_path, json_path
 
 
@@ -277,3 +378,45 @@ def write_storm_voyage_reports(
                 }
             )
     return manifest
+
+
+if __name__ == "__main__":
+    rec = {
+        "vessel_id": "9184902",
+        "vessel_name": "Test",
+        "source_port": "A",
+        "dest_port": "B",
+        "master_waypoints": [[12.0, 109.0], [14.0, 111.0]],
+    }
+    storm = {
+        "id": "S1",
+        "name": "TESTCANE",
+        "lat": 13.0,
+        "lon": 110.0,
+        "radius_nm": 80,
+        "wind_kn": 45,
+        "category": "TS",
+        "positions": [
+            {"lat": 12.5, "lon": 109.5, "valid_time": "2026-08-01T00:00:00Z"},
+            {"lat": 13.0, "lon": 110.0, "valid_time": "2026-08-01T12:00:00Z"},
+        ],
+    }
+    hit = {"storm_lat": 13.0, "storm_lon": 110.0, "route_encounter_likely": True, "center_buffer_nm": 100}
+    track = {
+        "track": [
+            {
+                "seq": 0,
+                "lat": 12.0,
+                "lon": 109.0,
+                "weather": {"windKn": 20, "waveM": 1.2, "swellM": 0.8, "windDirDeg": 90, "validTime": "t"},
+            }
+        ]
+    }
+    txt, js = write_storm_voyage_report("SELFTEST", rec, storm, hit, track=track, stamp="SELFTEST")
+    body = txt.read_text(encoding="utf-8")
+    assert "TROPICAL CYCLONE VESSEL ALERT REPORT" in body
+    assert "SYSTEM SUMMARY" in body
+    assert "TESTCANE" in body
+    assert js.is_file()
+    print("storm_report self-check ok")
+

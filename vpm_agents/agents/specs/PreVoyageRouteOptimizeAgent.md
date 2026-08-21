@@ -3,29 +3,37 @@
 ## Role
 
 At voyage start (after master route + initial weather) and again on noon weather
-refresh, propose 4 alternate routes optimized for different objectives, scored
-against weather limits **and** storm center/edge buffers.
+refresh, spawn **four objective sub-agents in parallel**. Each agent has its own
+MD spec and proposes the best sea-only track for **one** job from the master
+route. After weather-along, labels are assigned by measured metrics so the
+published “shortest” is actually shortest, “fastest” has the lowest
+weather-adjusted ETA, “least fuel” the lowest burn, and “safest” the calmest
+storm/weather exposure.
 
 ## Hard rules
 
-1. **No landmass** — a ship route must stay on water and at least
-   `VPM_LAND_CLEARANCE_NM` clear of land. Any alternate whose waypoints / 6h plan
-   samples land (or under-clearance water) is **rejected** and never suggested.
-   Conventional optimize builds coast-edge nodes from land rings so paths go
-   *around* continents instead of cutting chords.
-2. **Fixed endpoints** — origin and destination lat/lon are immutable; only
-   intermediate waypoints may move. Optimizer output is pinned to the input
-   start/end before scoring.
-3. Soft rules (weather limits, storm buffers) may be **loosened** only when no
-   land-safe alternate remains under the nominal caps. Land and endpoint rules
-   are never loosened.
+1. **No landmass** — the only hard constraint: no waypoint and no interpolated
+   leg may sit on land. `VPM_LAND_CLEARANCE_NM` is a preferred standoff for graph
+   nodes, **not** a reject. Conventional A* (default) builds a sea-only graph.
+2. **Fixed endpoints** — origin and destination lat/lon are immutable.
+3. Storm buffers and weather limits are **soft** (scored / optional keep-out on
+   safest). They may be loosened. Land and endpoints are never loosened.
 
 ## Objective
 
-Use weather along the plan plus active storm progressions to suggest **fastest**,
-**shortest**, **least fuel**, and **safest** routes among **sea-clear** candidates.
-Prefer routes that keep every waypoint outside `VPM_STORM_CENTER_BUFFER_NM` of
-any storm center and outside `VPM_STORM_EDGE_BUFFER_NM` of the storm edge (radius).
+Same master route, four specialist agents (fixed CP speed; weather adjusts ETA/fuel):
+- **RouteOptShortestAgent** — minimize sailed NM (land detours only)
+- **RouteOptFastestAgent** — minimize weather-adjusted ETA (calm can beat short+rough)
+- **RouteOptFuelAgent** — minimize weather-adjusted fuel (heavy seas burn more)
+- **RouteOptSafestAgent** — minimize storm/weather exposure (distance last)
+
+Each agent is scored after weather-along; the published label is the winner of
+that metric among the four candidates (not “whoever was asked”).
+
+Report for every published route: distance, days (sea-state ETAs), weather along
+the track, and fuel only when consumption was provided.
+
+Prefer routes that keep waypoints outside storm buffers when a sea-clear detour exists.
 
 Runs at:
 - **pre-voyage** when the daemon flow includes `route_optimize`
@@ -38,23 +46,26 @@ Runs at:
 
 ## Tasks
 
-1. Load voyage + fetch active storms (map-layer progressions).
-2. For each objective, call VO optimize with storm payload.
+1. Load voyage + last storm snapshot.
+2. Spawn RouteOptFastest/Shortest/Fuel/Safest agents and run them **in parallel**.
 3. Reject any result that crosses land (hard). Build 6h plan; score weather + storms.
-4. If no alternate passes soft weather/storm caps, loosen weather limits stepwise;
+4. Assign each report label to the candidate that wins that metric.
+5. If no alternate passes soft weather/storm caps, loosen weather limits stepwise;
    never re-admit a land-crossing route.
-5. Write index JSON + **one JSON per objective** under `reports/{voyage}/subreports/`.
+6. Write index JSON + **one JSON per objective** under `reports/{voyage}/subreports/`.
 6. Store `optimized_routes` + `suggested_route` on registry (prefer storm-clear sea routes).
+7. Enqueue `suggested_routes` job → `shipping_db.suggested_routes` (VO GeoJSON; one active row).
 
 ## Tools
 
 | Tool | Purpose |
 |------|---------|
-| `optimize` | Per-objective optimizer — local conventional (A*/Dijkstra), LLM (`RouteOptimizeLLMAgent.md`), or voyagepm_be (`VPM_ROUTE_OPT_METHOD`) |
-| `weather_route` | Weather along 6h plan |
-| `score` | Weather + storm violations |
+| `optimize_all` | Fan-out to 4 objective agents (parallel) |
+| `optimize` | Per-agent search — conventional A*, LLM (specialist MD), or voyagepm_be |
 
-Live mode defaults to **local** optimize (`VPM_ROUTE_OPT_METHOD=conventional|llm`); set `backend` only if voyagepm_be VO is available.
+Live mode: `VPM_ROUTE_OPT_METHOD=llm` uses each agent's MD as the system brief
+(`RouteOptFastestAgent.md` etc.). Conventional A* uses distinct edge costs per
+objective. Land check still applies.
 
 ## Defaults
 
