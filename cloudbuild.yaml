@@ -203,7 +203,4 @@ images:
 # OPTIONS
 # ============================================================
 
-options:
-  logging: CLOUD_LOGGING_ONLY
-
 timeout: '1800s'
