@@ -1,0 +1,84 @@
+steps:
+
+# 1. Build Docker image
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'Build Image'
+  args:
+    - 'build'
+    - '-t'
+    - 'asia-south1-docker.pkg.dev/$PROJECT_ID/vpm-agents/vpm-agents:latest'
+    - '.'
+
+# 2. Push Docker image to Artifact Registry
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'Push Image'
+  args:
+    - 'push'
+    - 'asia-south1-docker.pkg.dev/$PROJECT_ID/vpm-agents/vpm-agents:latest'
+
+# 3. Deploy to Compute Engine VM
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'Deploy To VM'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      set -e
+
+      IMAGE="asia-south1-docker.pkg.dev/$PROJECT_ID/vpm-agents/vpm-agents:latest"
+
+      gcloud compute ssh dev-voyagepm-agentic-agent \
+        --zone=asia-south1-a \
+        --project=$PROJECT_ID \
+        --quiet \
+        --command="
+          set -e
+
+          echo '=== Configure Artifact Registry ==='
+          gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+
+          echo '=== Pull Image ==='
+          docker pull $${IMAGE}
+
+          echo '=== Remove Old Containers ==='
+          docker rm -f vpm-ingest vpm-prevoyage-db 2>/dev/null || true
+
+          echo '=== Create Volumes ==='
+          docker volume create vpm_jobs >/dev/null
+          docker volume create vpm_inbox >/dev/null
+          docker volume create vpm_noon >/dev/null
+          docker volume create vpm_storm >/dev/null
+          docker volume create vpm_reports >/dev/null
+          docker volume create vpm_registry >/dev/null
+
+          echo '=== Start PreVoyage DB ==='
+          docker run -d \
+            --name vpm-prevoyage-db \
+            --restart unless-stopped \
+            -e VPM_SERVICE=prevoyage_db \
+            -v vpm_jobs:/data/jobs \
+            $${IMAGE}
+
+          echo '=== Start Ingest ==='
+          docker run -d \
+            --name vpm-ingest \
+            --restart unless-stopped \
+            -e VPM_SERVICE=ingest \
+            -v vpm_jobs:/data/jobs \
+            -v vpm_inbox:/data/inbox \
+            -v vpm_noon:/data/noon \
+            -v vpm_storm:/data/storm \
+            -v vpm_reports:/data/reports \
+            -v vpm_registry:/data/registry \
+            $${IMAGE}
+
+          echo '=== Running Containers ==='
+          docker ps --filter name=vpm-
+
+          echo '=== Deployment Complete ==='
+        "
+
+images:
+- 'asia-south1-docker.pkg.dev/$PROJECT_ID/vpm-agents/vpm-agents:latest'
+
+timeout: '1800s'

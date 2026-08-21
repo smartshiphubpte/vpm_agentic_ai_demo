@@ -1,0 +1,34 @@
+# Git
+.git
+.gitignore
+
+# Cursor
+.cursor/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Documentation / local files
+*.md
+!README.md
+
+# Local development
+gui/
+samples/
+temp.json
+
+# Runtime data
+data/
+inbox/
+noon_inbox/
+storm_alerts/
+reports/
+weather_reports/
+report_out/
+port_weather_out/
+
+# DO NOT exclude .env files
