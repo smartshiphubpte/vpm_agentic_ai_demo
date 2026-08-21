@@ -25,16 +25,52 @@ steps:
 
 
 # ============================================================
-# 3. DEPLOY TO VM
+# 3. GET ENV FROM SECRET MANAGER
+# ============================================================
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'Get Environment Secret'
+  entrypoint: 'bash'
+  secretEnv:
+    - 'VPM_ENV_FILE'
+  args:
+    - '-c'
+    - |
+      set -e
+      printf '%s\n' "$$VPM_ENV_FILE" > /workspace/vpm.env
+      chmod 600 /workspace/vpm.env
+      echo "Environment file created successfully."
+
+
+# ============================================================
+# 4. COPY ENV FILE TO VM
+# ============================================================
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'Copy Environment To VM'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+      set -e
+
+      gcloud compute scp \
+        /workspace/vpm.env \
+        dev-voyagepm-agentic-agent:/tmp/vpm.env \
+        --zone=asia-south1-a \
+        --project=$PROJECT_ID \
+        --quiet
+
+      echo "Environment file copied to VM."
+
+
+# ============================================================
+# 5. DEPLOY TO VM
 # ============================================================
 
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'Deploy To VM'
   entrypoint: 'bash'
-
-  secretEnv:
-    - 'VPM_ENV_FILE'
-
   args:
     - '-c'
     - |
@@ -42,14 +78,8 @@ steps:
 
       IMAGE="asia-south1-docker.pkg.dev/$PROJECT_ID/vpm-agents/vpm-agents:latest"
 
-      echo "Deploying image:"
-      echo "$${IMAGE}"
-
-      # Create temporary env file inside Cloud Build
-      printf '%s\n' "$$VPM_ENV_FILE" > /workspace/vpm.env
-
-      # Deploy to VM
-      gcloud compute ssh dev-voyagepm-agentic-agent \
+      gcloud compute ssh \
+        dev-voyagepm-agentic-agent \
         --zone=asia-south1-a \
         --project=$PROJECT_ID \
         --quiet \
@@ -71,17 +101,7 @@ steps:
           docker pull $${IMAGE}
 
           echo '=========================================='
-          echo 'Create temporary environment file'
-          echo '=========================================='
-
-          cat > /tmp/vpm.env <<'VPMENV'
-$$VPM_ENV_FILE
-VPMENV
-
-          chmod 600 /tmp/vpm.env
-
-          echo '=========================================='
-          echo 'Remove old containers'
+          echo 'Remove Old Containers'
           echo '=========================================='
 
           docker rm -f \
@@ -90,7 +110,7 @@ VPMENV
             2>/dev/null || true
 
           echo '=========================================='
-          echo 'Create Docker volumes'
+          echo 'Create Docker Volumes'
           echo '=========================================='
 
           docker volume create vpm_jobs >/dev/null
@@ -99,6 +119,8 @@ VPMENV
           docker volume create vpm_storm >/dev/null
           docker volume create vpm_reports >/dev/null
           docker volume create vpm_registry >/dev/null
+
+          chmod 600 /tmp/vpm.env
 
           echo '=========================================='
           echo 'Start PreVoyage DB'
@@ -130,7 +152,7 @@ VPMENV
             $${IMAGE}
 
           echo '=========================================='
-          echo 'Remove temporary environment file'
+          echo 'Remove Environment File From VM'
           echo '=========================================='
 
           rm -f /tmp/vpm.env
@@ -160,7 +182,7 @@ VPMENV
 
 
 # ============================================================
-# 4. AVAILABLE SECRET
+# SECRET MANAGER
 # ============================================================
 
 availableSecrets:
@@ -170,7 +192,7 @@ availableSecrets:
 
 
 # ============================================================
-# 5. IMAGE
+# IMAGE
 # ============================================================
 
 images:
@@ -178,7 +200,10 @@ images:
 
 
 # ============================================================
-# 6. OPTIONS
+# OPTIONS
 # ============================================================
+
+options:
+  logging: CLOUD_LOGGING_ONLY
 
 timeout: '1800s'
