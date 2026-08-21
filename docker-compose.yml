@@ -1,11 +1,12 @@
 # VoyagePM microservices — one container per independent loop.
-# Shared state: registry JSON + folders + jobs/ on a common volume.
+# Shared job bus: named volume `vpm_jobs` at /data/jobs (no host path required).
 #
+#   docker compose up --build ingest prevoyage-db
 #   docker compose up --build
 #   docker compose up --scale routeopt=4
 #
-# Host paths come from the project .env (same keys as local daemon).
-# Per-service `environment:` is not used — it would replace this map.
+# Host paths / secrets come from env_file (.env + prevoyage_db/.env where needed).
+# ingest / prevoyage-db override VPM_JOBS_DIR to the shared volume path.
 
 x-vpm: &vpm
   image: vpm-agents:local
@@ -13,23 +14,8 @@ x-vpm: &vpm
   env_file: .env
   restart: unless-stopped
   init: true
-  environment:
-    VPM_INBOX_DIR: /data/inbox
-    VPM_NOON_INBOX_DIR: /data/noon
-    VPM_STORM_OUT_DIR: /data/storm
-    VPM_REPORTS_OUT_DIR: /data/reports
-    VPM_TEMPLATES_DIR: /data/templates
-    VPM_REGISTRY_PATH: /data/registry
-    VPM_JOBS_DIR: /data/jobs
-    VPM_REPORT_SENDER_INBOX_DIR: /data/reports,/data/storm
   volumes:
-    - ${VPM_INBOX_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_inbox_dir}:/data/inbox
-    - ${VPM_NOON_INBOX_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_noon_inbox_dir}:/data/noon
-    - ${VPM_STORM_OUT_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_Storm_out_dir}:/data/storm
-    - ${VPM_REPORTS_OUT_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_report_out_dir}:/data/reports
-    - ${VPM_TEMPLATES_DIR:-./templates}:/data/templates
-    - ${VPM_REGISTRY_PATH:-/home/gunish/Projects/vpm_agentic_Data/vpm_registry_dir}:/data/registry
-    - ${VPM_JOBS_DIR:-/home/gunish/Projects/vpm_agentic_Data/vpm_jobs}:/data/jobs
+    - vpm_jobs:/data/jobs
 
 services:
   ingest:
@@ -37,7 +23,15 @@ services:
     env_file:
       - .env
       - prevoyage_db/.env
+    # Bypass flaky Docker→systemd-resolved DNS (Errno -3 on imap.*).
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     command: ["python3", "scripts/run_service.py", "ingest"]
+    environment:
+      VPM_JOBS_DIR: /data/jobs
+    volumes:
+      - vpm_jobs:/data/jobs
 
   noon:
     <<: *vpm
@@ -72,3 +66,10 @@ services:
       - .env
       - prevoyage_db/.env
     command: ["python3", "scripts/run_service.py", "prevoyage_db"]
+    environment:
+      VPM_JOBS_DIR: /data/jobs
+    volumes:
+      - vpm_jobs:/data/jobs
+
+volumes:
+  vpm_jobs:
