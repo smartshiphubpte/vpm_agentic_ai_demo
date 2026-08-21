@@ -1,15 +1,19 @@
-# Python
+# Python / tooling
 __pycache__/
 *.py[cod]
 .venv/
 *.egg-info/
+.pytest_cache/
 
-# Local / secrets
+# VCS / IDE
+.git/
+.cursor/
+
+# Secrets — never bake into the image (.env.example is kept)
 .env
-.git
-.cursor
+**/.env
 
-# Runtime data (mounted as volumes). Python packages are inbox_agent/ noon_agent/ …
+# Local runtime outputs (compose mounts these; not part of the app)
 data/
 inbox/
 noon_inbox/
@@ -18,14 +22,4 @@ reports/
 weather_reports/
 report_outbox/
 port_weather_out/
-
-# Noise — keep agent specs (loaded at runtime by spec_loader)
-docs/
-*.md
-!vpm_agents/agents/specs/
-!vpm_agents/agents/specs/*.md
-!README.md
-.pytest_cache/
-samples/
-gui/
 temp.json
