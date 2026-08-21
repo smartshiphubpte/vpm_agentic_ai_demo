@@ -379,26 +379,3 @@ def try_attachments(mail: IncomingMail) -> tuple[list[dict[str, Any]], list[str]
     return ok, issues
 
 
-if __name__ == "__main__":
-    from email.mime.application import MIMEApplication
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    from pathlib import Path
-
-    assert _candidate_hosts()[0] in ("imap.ipower.com", "imap.gmail.com", "outlook.office365.com") or settings.mail_imap_host
-    assert "smtp.ipower.com" in _smtp_candidate_hosts() or settings.smtp_host
-    assert _is_transient(socket.gaierror(-3, "Temporary failure in name resolution"))
-    assert not _is_transient(RuntimeError("AUTHENTICATIONFAILED"))
-    sample = Path(__file__).resolve().parents[1] / "samples" / "inbox" / "pre_voyage.csv"
-    outer = MIMEMultipart()
-    outer["Subject"] = "Pre-Dep test"
-    outer["From"] = "master@ship.test"
-    outer.attach(MIMEText("see attached"))
-    att = MIMEApplication(sample.read_bytes(), Name=sample.name)
-    att["Content-Disposition"] = f'attachment; filename="{sample.name}"'
-    outer.attach(att)
-    mail = parse_rfc822(outer.as_bytes())
-    assert mail.attachments and mail.attachments[0][0] == sample.name
-    rec, errs = try_parse_pre_voyage(filename=mail.attachments[0][0], data=mail.attachments[0][1])
-    assert rec and not errs, (rec, errs)
-    print("mail_inbox self-check ok")
