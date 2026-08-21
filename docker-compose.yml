@@ -5,7 +5,12 @@
 #   docker compose up --build
 #   docker compose up --scale routeopt=4
 #
-# Host paths / secrets come from env_file (.env + prevoyage_db/.env where needed).
+# Config:
+#   Local Compose: env_file (.env) → process env (overrides everything).
+#   Production GCP: set VPM_CONFIG_SOURCE=gcp — loads flat JSON from Secret Manager
+#     projects/605301150765/secrets/DEV-VOYAGEPM-AGENTIC-AGENT
+#     (override with VPM_GCP_SECRET / VPM_GCP_SECRET_VERSION).
+#   VM/service account needs roles/secretmanager.secretAccessor on that secret.
 # ingest / prevoyage-db override VPM_JOBS_DIR to the shared volume path.
 
 x-vpm: &vpm
@@ -16,6 +21,11 @@ x-vpm: &vpm
   init: true
   volumes:
     - vpm_jobs:/data/jobs
+  # Production example (drop env_file; use GCE/Workload Identity for ADC):
+  environment:
+    VPM_CONFIG_SOURCE: gcp
+    VPM_GCP_SECRET: projects/605301150765/secrets/DEV-VOYAGEPM-AGENTIC-AGENT
+    VPM_JOBS_DIR: /data/jobs
 
 services:
   ingest:
