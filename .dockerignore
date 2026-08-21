@@ -19,8 +19,11 @@ weather_reports/
 report_outbox/
 port_weather_out/
 
-# Noise
+# Noise — keep agent specs (loaded at runtime by spec_loader)
+docs/
 *.md
+!vpm_agents/agents/specs/
+!vpm_agents/agents/specs/*.md
 !README.md
 .pytest_cache/
 samples/
