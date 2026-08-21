@@ -6,10 +6,11 @@
 #   docker compose up --scale routeopt=4
 #
 # Config:
-#   Local Compose: env_file (.env) → process env (overrides everything).
+#   Local Compose: env_file (.env) fills gaps; secret/JSON keys override env when loaded.
 #   Production GCP: set VPM_CONFIG_SOURCE=gcp — loads flat JSON from Secret Manager
 #     projects/605301150765/secrets/DEV-VOYAGEPM-AGENTIC-AGENT
 #     (override with VPM_GCP_SECRET / VPM_GCP_SECRET_VERSION).
+#   Per key: secret/JSON > process env > unset.
 #   VM/service account needs roles/secretmanager.secretAccessor on that secret.
 # ingest / prevoyage-db override VPM_JOBS_DIR to the shared volume path.
 
